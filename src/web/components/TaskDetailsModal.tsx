@@ -10,6 +10,7 @@ import MermaidMarkdown from './MermaidMarkdown';
 import ChipInput from "./ChipInput";
 import DependencyInput from "./DependencyInput";
 import { DependencyGraphSection } from "./DependencyGraphSection";
+import { CollapsibleSection } from "./CollapsibleSection";
 import StoredDate from "./StoredDate";
 import { getPriorityOptions } from "../../utils/priority-config";
 import { getProjectValues, resolveProjectValue } from "../../utils/project-config";
@@ -1301,14 +1302,15 @@ export const TaskDetailsModal: React.FC<Props> = ({
 
           {subtasks.length > 0 && (
             <section className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-              <SectionHeader
-                title="Subtasks"
+              <CollapsibleSection
+                name="Subtasks"
+                hasContent
                 right={
                   subtaskProgress
                     ? `${subtaskProgress.completed} of ${subtaskProgress.total} complete`
                     : undefined
                 }
-              />
+              >
               <div className="divide-y divide-gray-100 dark:divide-gray-700" data-subtask-list>
                 {subtasks.map((subtask) => {
                   const nested = summarizeSubtaskProgress(subtask, availableTasks, availableStatuses);
@@ -1347,12 +1349,13 @@ export const TaskDetailsModal: React.FC<Props> = ({
                   );
                 })}
               </div>
+              </CollapsibleSection>
             </section>
           )}
 
           {/* References */}
           <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
-            <SectionHeader title="References" />
+            <CollapsibleSection name="References" hasContent={references.length > 0}>
             <div className="space-y-3">
               {references.length > 0 ? (
                 <ul className="space-y-2">
@@ -1422,11 +1425,16 @@ export const TaskDetailsModal: React.FC<Props> = ({
                 </form>
               )}
             </div>
+            </CollapsibleSection>
           </div>
 
           {/* Modified files */}
           <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
-            <SectionHeader title={`Modified files${modifiedFiles.length ? ` (${modifiedFiles.length})` : ""}`} />
+            <CollapsibleSection
+              name="Modified files"
+              title={`Modified files${modifiedFiles.length ? ` (${modifiedFiles.length})` : ""}`}
+              hasContent={modifiedFiles.length > 0}
+            >
             <div className="space-y-3">
               {modifiedFiles.length > 0 ? (
                 // A finished task can list hundreds of paths, so the list scrolls inside the
@@ -1487,12 +1495,13 @@ export const TaskDetailsModal: React.FC<Props> = ({
                 </form>
               )}
             </div>
+            </CollapsibleSection>
           </div>
 
           {/* Documentation */}
           {documentation.length > 0 && (
             <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
-              <SectionHeader title="Documentation" />
+              <CollapsibleSection name="Documentation" hasContent>
               <div className="space-y-2">
                 <ul className="space-y-2">
                   {documentation.map((doc, idx) => (
@@ -1517,17 +1526,20 @@ export const TaskDetailsModal: React.FC<Props> = ({
                   ))}
                 </ul>
               </div>
+              </CollapsibleSection>
             </div>
           )}
 
           {/* Acceptance Criteria */}
           <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
-            <SectionHeader
+            <CollapsibleSection
+              name="Acceptance Criteria"
               title={`Acceptance Criteria ${totalCount ? `(${checkedCount}/${totalCount})` : ""}`}
+              hasContent={totalCount > 0}
               right={mode === "preview" ? (
                 <span>Toggle to update</span>
               ) : null}
-            />
+            >
             {mode === "preview" ? (
               <ul className="space-y-2">
                 {(criteria || []).map((c) => (
@@ -1551,16 +1563,19 @@ export const TaskDetailsModal: React.FC<Props> = ({
             ) : (
               <AcceptanceCriteriaEditor criteria={criteria} onChange={setCriteria} />
             )}
+            </CollapsibleSection>
           </div>
 
           {/* Definition of Done */}
           <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
-            <SectionHeader
+            <CollapsibleSection
+              name="Definition of Done"
               title={`Definition of Done ${definitionTotalCount ? `(${definitionCheckedCount}/${definitionTotalCount})` : ""}`}
+              hasContent={definitionTotalCount > 0}
               right={mode === "preview" ? (
                 <span>Toggle to update</span>
               ) : null}
-            />
+            >
             {mode === "preview" ? (
               <ul className="space-y-2">
                 {(definitionOfDone || []).map((item) => (
@@ -1587,18 +1602,20 @@ export const TaskDetailsModal: React.FC<Props> = ({
                 disableToggle={isCreateMode}
               />
             )}
+            </CollapsibleSection>
           </div>
 
           {dependencyGraph && dependencyGraph.nodes.length > 1 && (
             <section className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
-              <SectionHeader title="Dependency Graph" />
-              <DependencyGraphSection graph={dependencyGraph} />
+              <CollapsibleSection name="Dependency Graph" hasContent>
+                <DependencyGraphSection graph={dependencyGraph} />
+              </CollapsibleSection>
             </section>
           )}
 
           {/* Implementation Plan */}
           <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
-            <SectionHeader title="Implementation Plan" />
+            <CollapsibleSection name="Implementation Plan" hasContent={plan.trim().length > 0}>
             {mode === "preview" ? (
               plan ? (
                 <div className="prose prose-sm !max-w-none wmde-markdown" data-color-mode={theme}>
@@ -1618,11 +1635,12 @@ export const TaskDetailsModal: React.FC<Props> = ({
                 />
               </div>
             )}
+            </CollapsibleSection>
           </div>
 
           {/* Implementation Notes */}
           <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
-            <SectionHeader title="Implementation Notes" />
+            <CollapsibleSection name="Implementation Notes" hasContent={notes.trim().length > 0}>
             {mode === "preview" ? (
               notes ? (
                 <div className="prose prose-sm !max-w-none wmde-markdown" data-color-mode={theme}>
@@ -1642,12 +1660,17 @@ export const TaskDetailsModal: React.FC<Props> = ({
                 />
               </div>
             )}
+            </CollapsibleSection>
           </div>
 
           {/* Comments */}
           {!isCreateMode && (
             <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
-              <SectionHeader title={`Comments${comments.length ? ` (${comments.length})` : ""}`} />
+              <CollapsibleSection
+                name="Comments"
+                title={`Comments${comments.length ? ` (${comments.length})` : ""}`}
+                hasContent={comments.length > 0}
+              >
               {comments.length > 0 ? (
                 <div className="space-y-4">
                   {comments.map((comment) => (
@@ -1694,13 +1717,14 @@ export const TaskDetailsModal: React.FC<Props> = ({
                   </div>
                 </div>
               )}
+              </CollapsibleSection>
             </div>
           )}
 
           {/* Final Summary */}
           {(mode !== "preview" || finalSummary.trim().length > 0) && (
             <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4">
-              <SectionHeader title="Final Summary" right="Completion summary" />
+              <CollapsibleSection name="Final Summary" hasContent={finalSummary.trim().length > 0} right="Completion summary">
               {mode === "preview" ? (
                 <div className="prose prose-sm !max-w-none wmde-markdown" data-color-mode={theme}>
                   <MermaidMarkdown source={finalSummary} />
@@ -1719,6 +1743,7 @@ export const TaskDetailsModal: React.FC<Props> = ({
                   />
                 </div>
               )}
+              </CollapsibleSection>
             </div>
           )}
         </div>
@@ -1739,13 +1764,14 @@ export const TaskDetailsModal: React.FC<Props> = ({
 	          )}
           {mode !== "preview" && (
             <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3">
-              <SectionHeader title="Due" />
+              <CollapsibleSection name="Due" hasContent={dueDate.trim().length > 0}>
               <input
                 type="date"
                 value={dueDate}
                 onChange={(event) => setDueDate(event.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 focus:border-transparent"
               />
+              </CollapsibleSection>
             </div>
           )}
           {/* Title (editable for existing tasks) */}
@@ -1811,7 +1837,7 @@ export const TaskDetailsModal: React.FC<Props> = ({
 
           {/* Assignee */}
           <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3">
-            <SectionHeader title="Assignee" />
+            <CollapsibleSection name="Assignee" hasContent={assignee.length > 0}>
             <ChipInput
               name="assignee"
               label=""
@@ -1820,6 +1846,7 @@ export const TaskDetailsModal: React.FC<Props> = ({
               placeholder="Type name and press Enter"
               disabled={isFromOtherBranch}
             />
+            </CollapsibleSection>
           </div>
 
           {/* Labels */}
@@ -1856,7 +1883,7 @@ export const TaskDetailsModal: React.FC<Props> = ({
           {/* Project */}
           {projectOptions.length > 0 && (
             <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3">
-              <SectionHeader title="Project" />
+              <CollapsibleSection name="Project" hasContent={project.trim().length > 0}>
               <select
                 className={`w-full h-10 px-3 pr-10 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-stone-500 dark:focus:ring-stone-400 focus:border-transparent transition-colors duration-200 ${isFromOtherBranch ? 'opacity-60 cursor-not-allowed' : ''}`}
                 aria-label="Task project"
@@ -1874,12 +1901,13 @@ export const TaskDetailsModal: React.FC<Props> = ({
                   </option>
                 ))}
               </select>
+              </CollapsibleSection>
             </div>
           )}
 
           {/* Milestone */}
           <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3">
-            <SectionHeader title="Milestone" />
+            <CollapsibleSection name="Milestone" hasContent={milestone.trim().length > 0}>
             <select
               className={`w-full h-10 px-3 pr-10 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-stone-500 dark:focus:ring-stone-400 focus:border-transparent transition-colors duration-200 ${isFromOtherBranch ? 'opacity-60 cursor-not-allowed' : ''}`}
               value={milestoneSelectionValue}
@@ -1900,11 +1928,12 @@ export const TaskDetailsModal: React.FC<Props> = ({
                 </option>
               ))}
             </select>
+            </CollapsibleSection>
           </div>
 
           {/* Dependencies */}
           <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3">
-            <SectionHeader title="Dependencies" />
+            <CollapsibleSection name="Dependencies" hasContent={dependencies.length > 0}>
             <DependencyInput
               value={dependencies}
               onChange={(value) => handleInlineMetaUpdate({ dependencies: value })}
@@ -1926,6 +1955,7 @@ export const TaskDetailsModal: React.FC<Props> = ({
                 <span>{shownReadiness.isReady ? 'Ready to start' : formatReadinessBlockers(shownReadiness)}</span>
               </div>
             )}
+            </CollapsibleSection>
           </div>
 
           {/* Archive button at bottom of sidebar */}
