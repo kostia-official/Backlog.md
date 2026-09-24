@@ -80,6 +80,8 @@ export interface Task {
 	branch?: string;
 	ordinal?: number;
 	filePath?: string;
+	/** Directory slug for a new task's `task_home`; never written to the file. */
+	slug?: string;
 	// Metadata fields
 	lastModified?: Date;
 	source?: "local" | "remote" | "completed" | "local-branch";
@@ -136,6 +138,8 @@ export interface TaskCreateInput {
 	definitionOfDoneAdd?: string[];
 	disableDefinitionOfDoneDefaults?: boolean;
 	rawContent?: string;
+	/** Directory slug for `task_home`; defaults to the title's first six words. */
+	slug?: string;
 }
 
 export interface TaskUpdateInput {
@@ -354,6 +358,8 @@ export interface BacklogConfig {
 	activeBranchDays?: number; // How many days a branch is considered active (default: 30)
 	/** Project-relative backlog folder when config is stored at project root in backlog.config.yml. */
 	backlogDirectory?: string;
+	/** Project-relative path pattern with `{ID}` and `{slug}` for the real file of each new task; the backlog tree holds a symlink to it. */
+	taskHome?: string;
 	/** Global callback command to run on any task status change. Supports $TASK_ID, $OLD_STATUS, $NEW_STATUS, $TASK_TITLE variables. */
 	onStatusChange?: string;
 	/** ID prefix configuration for tasks and drafts. Defaults to { task: "task", draft: "draft" } */

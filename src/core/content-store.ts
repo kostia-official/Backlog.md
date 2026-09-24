@@ -2,6 +2,7 @@ import { type FSWatcher, watch } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { FileSystem } from "../file-system/operations.ts";
+import { watchTaskLinkTargets } from "../file-system/task-links.ts";
 import { parseDecision, parseDocument, parseTask } from "../markdown/parser.ts";
 import type { BacklogConfig, Decision, Document, Task, TaskListFilter } from "../types/index.ts";
 import { watchConfigFile } from "../utils/config-watcher.ts";
@@ -1052,7 +1053,7 @@ export class ContentStore {
 
 	private createTaskWatcher(epoch: number): WatchHandle {
 		const tasksDir = this.filesystem.tasksDir;
-		const watcher: FSWatcher = watch(tasksDir, { recursive: false }, (eventType, filename) => {
+		const onTaskEvent = (eventType: string, filename: string | Buffer | null) => {
 			const file = this.normalizeFilename(filename);
 			if (!file || !/^[a-zA-Z]+-/.test(file) || !file.endsWith(".md")) {
 				void this.enqueueRoot(epoch, async () => this.refreshTasksFromDisk(undefined, epoch));
@@ -1132,16 +1133,29 @@ export class ContentStore {
 					}
 				});
 			});
+		};
+		// A watch on a directory does not see edits to the real files behind its symlinks.
+		const taskLinks = watchTaskLinkTargets(tasksDir, (linkName) => onTaskEvent("change", linkName));
+		const watcher: FSWatcher = watch(tasksDir, { recursive: false }, (eventType, filename) => {
+			onTaskEvent(eventType, filename);
+			void taskLinks.refresh();
 		});
 		this.attachWatcherErrorHandler(watcher, "tasks");
-		const completedWatcher = watch(this.filesystem.completedDir, { recursive: false }, () => {
+		const refreshCompleted = () => {
 			void this.enqueueRoot(epoch, async () => this.refreshTasksFromDisk(undefined, epoch));
+		};
+		const completedLinks = watchTaskLinkTargets(this.filesystem.completedDir, refreshCompleted);
+		const completedWatcher = watch(this.filesystem.completedDir, { recursive: false }, () => {
+			refreshCompleted();
+			void completedLinks.refresh();
 		});
 		this.attachWatcherErrorHandler(completedWatcher, "completed tasks");
 		return {
 			stop: () => {
 				watcher.close();
 				completedWatcher.close();
+				taskLinks.stop();
+				completedLinks.stop();
 			},
 		};
 	}

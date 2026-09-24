@@ -2,6 +2,7 @@ import { mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { $ } from "bun";
+import { isSymlink, withLinkTargets } from "../file-system/task-links.ts";
 import type { BacklogConfig } from "../types/index.ts";
 
 type GitPathContext = {
@@ -116,6 +117,7 @@ export class GitOperations {
 	}
 
 	async addFile(filePath: string): Promise<void> {
+		for (const linkTarget of (await withLinkTargets([filePath])).slice(1)) await this.addFile(linkTarget);
 		const context = await this.getPathContext(filePath);
 		if (context) {
 			await this.execGit(["add", context.relativePath], { cwd: context.repoRoot });
@@ -151,7 +153,8 @@ export class GitOperations {
 	}
 
 	async commitFiles(message: string, filePaths: string[], repoRoot?: string | null): Promise<void> {
-		const uniqueFilePaths = Array.from(new Set(filePaths.map((path) => path.trim()).filter((path) => path.length > 0)));
+		const requestedPaths = filePaths.map((path) => path.trim()).filter((path) => path.length > 0);
+		const uniqueFilePaths = Array.from(new Set(await withLinkTargets(requestedPaths)));
 		if (uniqueFilePaths.length === 0) {
 			return;
 		}
@@ -681,6 +684,7 @@ export class GitOperations {
 			}
 			try {
 				await this.execGit(["add", pathForAdd], { cwd: repoRoot });
+				for (const linkTarget of (await withLinkTargets([filePath])).slice(1)) await this.addFile(linkTarget);
 				expectedIndexEntries = await this.getIndexEntries(filePath);
 				onStaged?.(expectedIndexEntries);
 				await this.commitFiles(actionMessages[action], [filePath], repoRoot);
@@ -732,6 +736,7 @@ export class GitOperations {
 
 		// Always stage the new file location
 		await this.execGit(["add", relativeTo ?? toPath], { cwd: repoRoot });
+		for (const linkTarget of (await withLinkTargets([toPath])).slice(1)) await this.addFile(linkTarget);
 		return repoRoot === this.projectRoot ? null : repoRoot;
 	}
 
@@ -943,6 +948,12 @@ export class GitOperations {
 			return null;
 		}
 	}
+	/** True when `path` is a symlink (mode 120000) in the tree of `ref`. */
+	async isSymlinkInTree(ref: string, path: string): Promise<boolean> {
+		const { stdout } = await this.execGit(["ls-tree", ref, "--", path], { readOnly: true });
+		return stdout.startsWith("120000 ");
+	}
+
 	async showFile(ref: string, filePath: string): Promise<string> {
 		if (!(await this.isRepository())) {
 			return "";
@@ -1195,7 +1206,8 @@ export class GitOperations {
 
 	private async getPathContext(targetPath: string): Promise<GitPathContext | null> {
 		const absolutePath = isAbsolute(targetPath) ? targetPath : join(this.projectRoot, targetPath);
-		const resolvedPath = await realpath(absolutePath).catch(() => null);
+		// A symlinked file is tracked as the link itself, so only its directory is resolved.
+		const resolvedPath = (await isSymlink(absolutePath)) ? null : await realpath(absolutePath).catch(() => null);
 		if (resolvedPath) {
 			return this.buildContext(resolvedPath);
 		}
@@ -1208,7 +1220,7 @@ export class GitOperations {
 
 	private async getRelativePathForRepo(targetPath: string, repoRoot: string): Promise<string | null> {
 		const absolutePath = isAbsolute(targetPath) ? targetPath : join(this.projectRoot, targetPath);
-		const resolvedPath = await realpath(absolutePath).catch(() => null);
+		const resolvedPath = (await isSymlink(absolutePath)) ? null : await realpath(absolutePath).catch(() => null);
 		const pathForRelative = resolvedPath ?? (await this.resolveMissingPath(absolutePath));
 		if (!pathForRelative) return null;
 

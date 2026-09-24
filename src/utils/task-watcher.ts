@@ -1,6 +1,7 @@
 import { type FSWatcher, watch } from "node:fs";
 import { stat } from "node:fs/promises";
 import type { Core } from "../core/backlog.ts";
+import { watchTaskLinkTargets } from "../file-system/task-links.ts";
 import type { Task } from "../types/index.ts";
 import { hasAnyPrefix } from "./prefix-config.ts";
 import { extractTaskIdFromFilename, normalizeTaskId, normalizeTaskIdentity, taskIdsEqual } from "./task-path.ts";
@@ -203,8 +204,14 @@ export function watchTasks(
 		})().catch(() => {});
 	};
 
+	// A watch on a directory does not see edits to the real files behind its symlinks.
+	const taskLinks = watchTaskLinkTargets(tasksDir, (linkName) => {
+		const [taskId] = linkName.split(" ");
+		if (taskId && hasAnyPrefix(taskId)) schedule(taskId);
+	});
 	const watcher: FSWatcher = watch(tasksDir, { recursive: false }, (eventType, filename) => {
 		if (eventType !== "change" && eventType !== "rename") return;
+		void taskLinks.refresh();
 
 		const rawFilename: unknown = filename;
 		const fileName =
@@ -232,6 +239,7 @@ export function watchTasks(
 			try {
 				watcher.close();
 			} catch {}
+			taskLinks.stop();
 		},
 	};
 }

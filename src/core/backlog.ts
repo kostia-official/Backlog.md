@@ -10,6 +10,13 @@ import {
 	isCreateLockError,
 	newTaskLockError,
 } from "../file-system/operations.ts";
+import {
+	isSymlink,
+	listTaskHomeIds,
+	moveTaskFile,
+	removeCreatedTaskHome,
+	saveRelocatedRecord,
+} from "../file-system/task-links.ts";
 import { type GitBranchTip, type GitIndexEntry, GitOperations } from "../git/operations.ts";
 import { parseFrontmatter } from "../markdown/frontmatter.ts";
 import { parseTask } from "../markdown/parser.ts";
@@ -152,6 +159,8 @@ interface CreatedTaskWrite {
 	previousContent: Buffer | null;
 	previousIndexEntries?: GitIndexEntry[];
 	generatedIndexEntries?: GitIndexEntry[];
+	/** The `task_home` directory this create made; rollback removes it. */
+	createdHomeDir?: string;
 }
 
 interface CreatedTaskRollbackResult {
@@ -1600,7 +1609,14 @@ export class Core {
 		for (const entry of worktreeEntries) {
 			if (entry.type === "task" || entry.type === "completed") occupiedIds.add(entry.id);
 		}
+		for (const id of await this.listTaskHomeIds(taskPrefix)) occupiedIds.add(id);
 		return [...occupiedIds];
+	}
+
+	/** Ids held by `task_home` directories, which stay taken even when no link points at them. */
+	private async listTaskHomeIds(prefix: string): Promise<string[]> {
+		const pattern = (await this.fs.loadConfig())?.taskHome;
+		return pattern ? await listTaskHomeIds(this.fs.rootDir, pattern, prefix) : [];
 	}
 
 	/**
@@ -1620,8 +1636,12 @@ export class Core {
 			case EntityType.Draft: {
 				// Occupancy includes filename-derived ids: an unparsable file still reserves its
 				// numeric id, so allocation can never reuse what it cannot parse.
-				const [drafts, occupiedFileIds] = await Promise.all([this.fs.listDrafts(), this.fs.listOccupiedDraftFileIds()]);
-				return [...drafts.map((d) => d.id), ...occupiedFileIds];
+				const [drafts, occupiedFileIds, homeIds] = await Promise.all([
+					this.fs.listDrafts(),
+					this.fs.listOccupiedDraftFileIds(),
+					this.listTaskHomeIds("draft"),
+				]);
+				return [...drafts.map((d) => d.id), ...occupiedFileIds, ...homeIds];
 			}
 			case EntityType.Document: {
 				const documents = await this.fs.listDocuments();
@@ -1712,6 +1732,17 @@ export class Core {
 		} else if (stillOwnsCreatedPath && indexRestored) {
 			if (write.previousPath === write.filePath && write.previousContent) {
 				await writeFile(write.filePath, write.previousContent);
+			} else if (write.createdHomeDir) {
+				await removeCreatedTaskHome(write.filePath, write.createdHomeDir);
+			} else if (
+				write.previousPath &&
+				write.previousContent &&
+				(await isSymlink(write.filePath)) &&
+				(await this.readFileIfPresent(write.previousPath)) === null
+			) {
+				// The create moved an existing link; move it back and restore its file through it.
+				await moveTaskFile(write.filePath, write.previousPath);
+				await writeFile(write.previousPath, write.previousContent);
 			} else {
 				await unlink(write.filePath);
 			}
@@ -1844,6 +1875,7 @@ export class Core {
 						milestone: input.milestone.trim(),
 					}),
 				...(typeof input.description === "string" && { description: input.description }),
+				...(input.slug && { slug: input.slug }),
 				...(typeof input.implementationPlan === "string" && { implementationPlan: input.implementationPlan }),
 				...(typeof input.implementationNotes === "string" && { implementationNotes: input.implementationNotes }),
 				...(typeof input.finalSummary === "string" && { finalSummary: input.finalSummary }),
@@ -1859,6 +1891,13 @@ export class Core {
 			const previousPath = targetContent ? targetPath : resolvedPreviousPath;
 			const previousContent = targetContent ?? (await this.readFileIfPresent(resolvedPreviousPath));
 			const previousIndexEntries = autoCommitEnabled ? await this.git.getIndexEntries(targetPath) : undefined;
+			const pathExists = (path: string) =>
+				stat(path).then(
+					() => true,
+					() => false,
+				);
+			const homeDir = await this.fs.getTaskHomePath(task, isDraft).then((home) => home && dirname(home));
+			const homeDirExisted = homeDir ? await pathExists(homeDir) : true;
 			const filePath = await this.writePreparedTask(task, isDraft);
 			const createdContent = await readFile(filePath);
 			const write: CreatedTaskWrite = {
@@ -1867,6 +1906,7 @@ export class Core {
 				previousPath,
 				previousContent,
 				previousIndexEntries,
+				...(homeDir && !homeDirExisted && (await pathExists(homeDir)) && { createdHomeDir: homeDir }),
 			};
 			return {
 				task,
@@ -2725,9 +2765,11 @@ export class Core {
 				};
 
 				normalizeAssignee(promotedTask);
-				const savedPath = await this.fs.saveTask(promotedTask);
+				const { savedPath, moved } = draftPath
+					? await saveRelocatedRecord(this.fs, promotedTask, draftPath, false)
+					: { savedPath: await this.fs.saveTask(promotedTask), moved: false };
 
-				if (draftPath) {
+				if (draftPath && !moved) {
 					await unlink(draftPath);
 				}
 
@@ -2798,9 +2840,11 @@ export class Core {
 				};
 
 				normalizeAssignee(demotedDraft);
-				const savedPath = await this.fs.saveDraft(demotedDraft);
+				const { savedPath, moved } = taskPath
+					? await saveRelocatedRecord(this.fs, demotedDraft, taskPath, true)
+					: { savedPath: await this.fs.saveDraft(demotedDraft), moved: false };
 
-				if (taskPath) {
+				if (taskPath && !moved) {
 					await unlink(taskPath);
 				}
 
@@ -3312,7 +3356,7 @@ export class Core {
 
 		return await this.withVacatedIdCleanup(taskToArchive, normalizedTaskId, async (cleanup) => {
 			try {
-				await moveFile(fromPath, toPath);
+				await moveTaskFile(fromPath, toPath);
 			} catch {
 				return { success: false, cleanedTaskIds: [] };
 			}
@@ -3431,7 +3475,7 @@ export class Core {
 		const toPath = join(completedDir, taskFilename);
 
 		try {
-			await moveFile(fromPath, toPath);
+			await moveTaskFile(fromPath, toPath);
 		} catch {
 			return false;
 		}
@@ -3515,8 +3559,8 @@ export class Core {
 					};
 
 					normalizeAssignee(promotedTask);
-					const savedPath = await this.fs.saveTask(promotedTask);
-					await unlink(sourcePath);
+					const { savedPath, moved } = await saveRelocatedRecord(this.fs, promotedTask, sourcePath, false);
+					if (!moved) await unlink(sourcePath);
 
 					const savedTask = await this.fs.loadTask(promotedTask.id);
 					if (this.contentStore && savedTask) {

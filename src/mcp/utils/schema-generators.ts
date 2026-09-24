@@ -236,6 +236,12 @@ export function generateTaskCreateSchema(config: BacklogConfig): JsonSchema {
 				},
 				description: "Project-root-relative file paths modified by this task",
 			},
+			slug: {
+				type: "string",
+				maxLength: 100,
+				description:
+					"Optional kebab-case directory slug for the task's home when the project sets task_home; defaults to the title's first six words.",
+			},
 			finalSummary: {
 				type: "string",
 				maxLength: 20000,

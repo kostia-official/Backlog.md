@@ -8,6 +8,7 @@
  * - Remote branch tasks
  */
 
+import { posix } from "node:path";
 import { DEFAULT_DIRECTORIES } from "../constants/index.ts";
 import type { GitBranchTip, GitOperations } from "../git/operations.ts";
 import { parseTask } from "../markdown/parser.ts";
@@ -547,11 +548,19 @@ export class BranchTaskLoader {
 		}
 	}
 
+	/** A symlinked task is stored as its target path (mode 120000); the task is the target's blob. */
+	private async readTaskBlob(commit: string, path: string): Promise<string> {
+		const content = await this.git.showFile(commit, path);
+		if (content.startsWith("---")) return content;
+		if (!(await this.git.isSymlinkInTree(commit, path).catch(() => false))) return content;
+		return await this.git.showFile(commit, posix.join(posix.dirname(path), content.trim()));
+	}
+
 	private async loadCachedTask(commit: string, path: string): Promise<Task | null> {
 		const key = `${commit}\0${path}`;
 		let cached = this.taskCache.get(key);
 		if (!cached) {
-			const promise = this.git.showFile(commit, path).then((content) => {
+			const promise = this.readTaskBlob(commit, path).then((content) => {
 				try {
 					return normalizeTaskIdentity(parseTask(content));
 				} catch (error) {

@@ -1,5 +1,6 @@
-import { link, lstat, mkdtemp, rename, rmdir, unlink } from "node:fs/promises";
+import { link, lstat, mkdtemp, readlink, realpath, rename, rmdir, symlink, unlink } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { isSymlink } from "../file-system/task-links.ts";
 import type { Task } from "../types/index.ts";
 import { type DuplicateGroup, detectDuplicateTaskIds } from "../utils/duplicate-detection.ts";
 import { escapeRegex, generateNextId, generateNextSubtaskId, idForFilename } from "../utils/prefix-config.ts";
@@ -71,6 +72,8 @@ interface FileOwnershipIdentity {
 }
 
 async function readFileOwnershipIdentity(path: string): Promise<FileOwnershipIdentity> {
+	// A symlink is identified by its target text alone: it is recreated, not hard-linked, on install.
+	if (await isSymlink(path)) return { device: 0n, inode: 0n, contentHash: sha256(await readlink(path)) };
 	const [stats, content] = await Promise.all([lstat(path, { bigint: true }), Bun.file(path).arrayBuffer()]);
 	return {
 		device: stats.dev,
@@ -490,7 +493,12 @@ async function removeIfPresent(path: string): Promise<void> {
 /** @internal Installs a staged file without replacing an existing destination. */
 export async function installFileNoReplace(stagedPath: string, targetPath: string): Promise<void> {
 	// Staged and target files share a directory, so a hard link atomically claims
-	// the destination name and fails with EEXIST if an external writer won.
+	// the destination name and fails with EEXIST if an external writer won. A symlink
+	// is recreated with the same target text, which fails with EEXIST the same way.
+	if (await isSymlink(stagedPath)) {
+		await symlink(await readlink(stagedPath), targetPath);
+		return;
+	}
 	await link(stagedPath, targetPath);
 }
 
@@ -615,6 +623,8 @@ export async function applyDuplicateTaskIdRepair(
 					...change,
 					sourcePath,
 					targetPath,
+					originalContent: content,
+					linkTarget: (await isSymlink(sourcePath)) ? await realpath(sourcePath) : null,
 					content: replaceFrontmatterTaskId(content, change.oldId, change.newId),
 					stagedPath: `${targetPath}.backlog-doctor-${transactionId}-${index}.tmp`,
 					backupPath: `${sourcePath}.backlog-doctor-${transactionId}-${index}.bak`,
@@ -623,6 +633,7 @@ export async function applyDuplicateTaskIdRepair(
 		);
 
 		const staged: string[] = [];
+		const rewrittenLinkTargets: Array<{ path: string; content: string }> = [];
 		const stagedIdentities = new Map<string, FileOwnershipIdentity>();
 		const backups: Array<{ sourcePath: string; backupPath: string }> = [];
 		const installed: InstalledRepairFile[] = [];
@@ -633,7 +644,15 @@ export async function applyDuplicateTaskIdRepair(
 			});
 		try {
 			for (const item of prepared) {
-				await Bun.write(item.stagedPath, item.content);
+				if (item.linkTarget) {
+					// A linked task keeps its real file: the id changes there and only the link moves.
+					await Bun.write(item.linkTarget, item.content);
+					rewrittenLinkTargets.push({ path: item.linkTarget, content: item.originalContent });
+					const stagedDir = await realpath(dirname(item.stagedPath));
+					await symlink(relative(stagedDir, item.linkTarget), item.stagedPath);
+				} else {
+					await Bun.write(item.stagedPath, item.content);
+				}
 				staged.push(item.stagedPath);
 				stagedIdentities.set(item.stagedPath, await readFileOwnershipIdentity(item.stagedPath));
 			}
@@ -685,6 +704,11 @@ export async function applyDuplicateTaskIdRepair(
 				if (issue) rollbackIssues.push(issue);
 			}
 			for (const path of staged) await removeIfPresent(path).catch(() => {});
+			for (const target of rewrittenLinkTargets) {
+				await Bun.write(target.path, target.content).catch((rollbackError) =>
+					rollbackIssues.push(`Could not restore ${target.path}: ${errorMessage(rollbackError)}.`),
+				);
+			}
 			if (rollbackIssues.length > 0) {
 				throw new Error(
 					`Repair failed: ${errorMessage(error)}\nRollback preserved concurrent changes instead of overwriting them:\n${rollbackIssues.map((issue) => `- ${issue}`).join("\n")}`,

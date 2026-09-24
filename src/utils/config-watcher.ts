@@ -44,6 +44,7 @@ const RECOGNIZED_CONFIG_KEYS = new Set([
 	"task_prefix",
 	"backlog_directory",
 	"backlogDirectory",
+	"task_home",
 ]);
 
 function hasValidExplicitValues(content: string, config: BacklogConfig): boolean {

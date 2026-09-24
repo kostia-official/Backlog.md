@@ -31,6 +31,7 @@ import { formatTaskCallResult } from "../../utils/task-response.ts";
 
 export type TaskCreateArgs = {
 	title: string;
+	slug?: string;
 	description?: string;
 	labels?: string[];
 	assignee?: string[];
@@ -146,6 +147,7 @@ export class TaskHandlers {
 				priority: args.priority,
 				type: args.type,
 				project: args.project,
+				slug: args.slug,
 				...(typeof rawOrdinal === "number" ? { ordinal: rawOrdinal } : {}),
 				milestone,
 				labels: args.labels,

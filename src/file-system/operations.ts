@@ -42,6 +42,7 @@ import {
 } from "../utils/task-path.ts";
 import { sortByTaskId } from "../utils/task-sorting.ts";
 import { matchesTaskTypeFilter } from "../utils/task-type-config.ts";
+import { isSymlink, moveTaskFile, resolveTaskHome, saveRelocatedRecord, writeTaskFile } from "./task-links.ts";
 
 // Interface for task path resolution context
 interface TaskPathContext {
@@ -775,6 +776,12 @@ export class FileSystem {
 		return (await this.resolveTaskWriteTarget(task, isDraft)).filePath;
 	}
 
+	/** Where a new task's real file goes under `task_home`, or null when it is not set. */
+	async getTaskHomePath(task: Task, isDraft = false): Promise<string | null> {
+		const { id } = await this.resolveTaskWriteTarget(task, isDraft);
+		return resolveTaskHome(this.projectRoot, (await this.loadConfig())?.taskHome, id, task);
+	}
+
 	async saveTask(task: Task): Promise<string> {
 		const { id: taskId, filename, filePath: filepath } = await this.resolveTaskWriteTarget(task);
 		const prefix = extractAnyPrefix(taskId) ?? "task";
@@ -813,7 +820,9 @@ export class FileSystem {
 				const core = { filesystem: { tasksDir } };
 				const existingPath = await getTaskPath(taskId, core as TaskPathContext);
 				if (existingPath && !existingPath.endsWith(filename)) {
-					await unlink(existingPath);
+					// A linked task keeps its link under the new name, so the write below goes through it.
+					if (await isSymlink(existingPath)) await moveTaskFile(existingPath, filepath);
+					else await unlink(existingPath);
 				}
 			} catch (error) {
 				if (isAmbiguousTaskIdError(error)) throw error;
@@ -821,8 +830,7 @@ export class FileSystem {
 			}
 		}
 
-		await this.ensureDirectoryExists(dirname(filepath));
-		await Bun.write(filepath, content);
+		await writeTaskFile(filepath, content, await this.getTaskHomePath(normalizedTask));
 		return filepath;
 	}
 
@@ -1084,7 +1092,7 @@ export class FileSystem {
 			await this.ensureDirectoryExists(dirname(targetPath));
 
 			// Use rename for proper Git move detection
-			await rename(sourcePath, targetPath);
+			await moveTaskFile(sourcePath, targetPath);
 
 			return true;
 		} catch (error) {
@@ -1109,7 +1117,7 @@ export class FileSystem {
 			await this.ensureDirectoryExists(dirname(targetPath));
 
 			// Use rename for proper Git move detection
-			await rename(sourcePath, targetPath);
+			await moveTaskFile(sourcePath, targetPath);
 
 			return true;
 		} catch (error) {
@@ -1132,6 +1140,10 @@ export class FileSystem {
 			const filename = basename(sourcePath);
 			const targetPath = join(archiveDraftsDir, filename);
 
+			if (await isSymlink(sourcePath)) {
+				await moveTaskFile(sourcePath, targetPath);
+				return { sourcePath, targetPath };
+			}
 			const content = await Bun.file(sourcePath).text();
 			await this.ensureDirectoryExists(dirname(targetPath));
 			await Bun.write(targetPath, content);
@@ -1192,10 +1204,10 @@ export class FileSystem {
 					filePath: undefined, // Will be set by saveTask
 				};
 
-				await this.saveTask(promotedTask);
+				const { moved } = await saveRelocatedRecord(this, promotedTask, sourcePath, false);
 
 				// Delete old draft file
-				await unlink(sourcePath);
+				if (!moved) await unlink(sourcePath);
 
 				return true;
 			});
@@ -1233,12 +1245,12 @@ export class FileSystem {
 				filePath: undefined, // Will be set by saveDraft
 			};
 
-			const savedPath = await this.saveDraft(demotedDraft);
+			const { savedPath, moved } = await saveRelocatedRecord(this, demotedDraft, task.filePath, true);
 
 			// Delete old task file. If that fails, remove the newly written draft so a retry cannot
 			// encounter two copies of the task.
 			try {
-				await unlink(task.filePath);
+				if (!moved) await unlink(task.filePath);
 			} catch (error) {
 				try {
 					await unlink(savedPath);
@@ -1280,6 +1292,11 @@ export class FileSystem {
 			const candidatePath = join(draftsDir, existingFile);
 			if (!(await this.loadDraftFromFile(candidatePath))) continue;
 			try {
+				// A linked draft keeps its link under the new name, so the write below goes through it.
+				if ((await isSymlink(candidatePath)) && !(await isSymlink(filepath))) {
+					await moveTaskFile(candidatePath, filepath);
+					continue;
+				}
 				await unlink(candidatePath);
 			} catch (error) {
 				throw new Error(
@@ -1290,8 +1307,7 @@ export class FileSystem {
 			}
 		}
 
-		await this.ensureDirectoryExists(dirname(filepath));
-		await Bun.write(filepath, content);
+		await writeTaskFile(filepath, content, await this.getTaskHomePath(normalizedTask, true));
 		return filepath;
 	}
 
@@ -2170,6 +2186,9 @@ ${description || `Milestone: ${title}`}`,
 				case "backlogDirectory":
 					config.backlogDirectory = value.replace(/['"]/g, "");
 					break;
+				case "task_home":
+					config.taskHome = value.replace(/['"]/g, "");
+					break;
 			}
 		}
 
@@ -2200,6 +2219,7 @@ ${description || `Milestone: ${title}`}`,
 			onStatusChange: config.onStatusChange,
 			prefixes: config.prefixes,
 			backlogDirectory: config.backlogDirectory,
+			taskHome: config.taskHome,
 		};
 	}
 
@@ -2242,6 +2262,7 @@ ${description || `Milestone: ${title}`}`,
 			...(config.onStatusChange ? [`onStatusChange: '${config.onStatusChange}'`] : []),
 			...(config.prefixes?.task ? [`task_prefix: "${config.prefixes.task}"`] : []),
 			...(config.backlogDirectory ? [`backlog_directory: "${config.backlogDirectory}"`] : []),
+			...(config.taskHome ? [`task_home: "${config.taskHome}"`] : []),
 		];
 
 		return `${lines.join("\n")}\n`;

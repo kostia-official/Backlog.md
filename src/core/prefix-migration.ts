@@ -9,6 +9,7 @@
 import { unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { FileSystem } from "../file-system/operations.ts";
+import { saveRelocatedRecord } from "../file-system/task-links.ts";
 import { parseTask } from "../markdown/parser.ts";
 import type { BacklogConfig, Task } from "../types/index.ts";
 import { generateNextId } from "../utils/prefix-config.ts";
@@ -71,10 +72,10 @@ export async function migrateDraftPrefixes(fs: FileSystem): Promise<void> {
 			};
 
 			// Save with new draft- filename
-			await fs.saveDraft(migratedTask);
+			const { moved } = await saveRelocatedRecord(fs, migratedTask, filePath, true);
 
 			// Delete old task- file
-			await unlink(filePath);
+			if (!moved) await unlink(filePath);
 		} catch {}
 	}
 

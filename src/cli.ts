@@ -27,6 +27,7 @@ import { initializeProject } from "./core/init.ts";
 import { buildMilestoneBuckets, collectArchivedMilestoneKeys, milestoneKey } from "./core/milestones.ts";
 import { loadTaskDetail, loadTaskListItems } from "./core/task-detail.ts";
 import { isConfigValueError } from "./file-system/operations.ts";
+import { diagnoseTaskLinks, hasTaskLinkFindings, printTaskLinkReport } from "./file-system/task-links.ts";
 import {
 	decisionListJson,
 	formatJson,
@@ -549,6 +550,7 @@ function hasCreateFieldFlags(options: Record<string, unknown>): boolean {
 			options.priority !== undefined ||
 			options.type !== undefined ||
 			options.project !== undefined ||
+			options.slug !== undefined ||
 			options.ordinal !== undefined ||
 			options.milestone !== undefined ||
 			options.dueDate !== undefined ||
@@ -1899,6 +1901,7 @@ addHelpSchema(taskCmd.command("create [title]"), {
 		{ name: "type", type: taskType, description: "Task type; case-insensitive" },
 		{ name: "project", type: projectType, description: "Task project; case-insensitive" },
 		{ name: "due-date", type: "date", description: "Optional due date (YYYY-MM-DD)" },
+		{ name: "slug", type: "kebab-case", description: "Directory slug for task_home; defaults to the title" },
 		{ name: "acceptanceCriteria", type: "Markdown list item text", description: "Repeat --ac for multiple criteria" },
 		{ name: "ordinal", type: "Integer", description: "Non-negative manual ordering value" },
 		{ name: "parent", type: "Task ID", description: "Existing parent task for subtasks; not a milestone ID" },
@@ -1936,6 +1939,7 @@ addHelpSchema(taskCmd.command("create [title]"), {
 	.option("--type <type>", "set task type (configured task types)")
 	.option("--project <project>", "set task project (configured projects)")
 	.option("--due-date <date>", "set due date (YYYY-MM-DD)")
+	.option("--slug <slug>", "directory slug for task_home (kebab-case; defaults to the title)")
 	.option("--plain", "use plain text output after creating")
 	.option("--ac <criteria>", "add acceptance criteria (can be used multiple times)", createMultiValueAccumulator())
 	.option(
@@ -2066,6 +2070,7 @@ addHelpSchema(taskCmd.command("create [title]"), {
 				priority: options.priority ? String(options.priority) : undefined,
 				type: options.type !== undefined ? String(options.type) : undefined,
 				project: options.project !== undefined ? String(options.project) : undefined,
+				slug: typeof options.slug === "string" ? options.slug : undefined,
 				...(ordinalValue !== undefined ? { ordinal: ordinalValue } : {}),
 				milestone,
 				implementationPlan: options.plan ? String(options.plan) : undefined,
@@ -4123,6 +4128,7 @@ draftCmd
 	)
 	.option("-s, --status <status>")
 	.option("-l, --labels <labels>", "add draft labels (comma-separated or repeatable)", createMultiValueAccumulator())
+	.option("--slug <slug>", "directory slug for task_home (kebab-case; defaults to the title)")
 	.action(async (title: string, options) => {
 		const cwd = await requireProjectRoot();
 		const core = new Core(cwd);
@@ -4134,6 +4140,7 @@ draftCmd
 				status: "Draft",
 				assignee: parseClearableStringList(options.assignee),
 				labels: parseDelimitedStringList(options.labels),
+				slug: typeof options.slug === "string" ? options.slug : undefined,
 			});
 			console.log(`Created draft ${task.id}`);
 			console.log(`File: ${filePath}`);
@@ -5572,12 +5579,15 @@ addHelpSchema(program.command("doctor"), {
 			const draftIdentityBroken = hasDraftIdentityFindings(draftIdentity);
 			const dependencyDefects = await findDependencyDefects(core);
 			const dependenciesBroken = dependencyDefects.selfDependencies.length > 0 || dependencyDefects.cycles.length > 0;
+			const taskLinks = await diagnoseTaskLinks(core.filesystem.rootDir, core.filesystem.backlogDir, config?.taskHome);
+			const taskLinksBroken = hasTaskLinkFindings(taskLinks);
 			if (
 				plan.groups.length === 0 &&
 				plan.crossBranchFindings.length === 0 &&
 				!contentIdentityBroken &&
 				!draftIdentityBroken &&
-				!dependenciesBroken
+				!dependenciesBroken &&
+				!taskLinksBroken
 			) {
 				if (!reservedTaskPrefix) {
 					console.log("No duplicate IDs, self-referential dependencies, or dependency cycles found.");
@@ -5589,6 +5599,7 @@ addHelpSchema(program.command("doctor"), {
 			printContentIdentityReport(contentIdentity);
 			printDraftIdentityReport(draftIdentity);
 			printDependencyDefectsReport(dependencyDefects);
+			printTaskLinkReport(taskLinks);
 			if (!options.fix) {
 				if (plan.groups.length > 0 && plan.repairable) {
 					console.log("\nRun 'backlog doctor --fix' to apply this repair after reviewing the preview.");
@@ -5649,6 +5660,10 @@ addHelpSchema(program.command("doctor"), {
 			}
 			if (draftIdentityBroken) {
 				console.log("Draft identity findings remain diagnostic-only and still require manual review.");
+				process.exitCode = 1;
+			}
+			if (taskLinksBroken) {
+				console.log("Task link findings remain diagnostic-only and still require manual repair.");
 				process.exitCode = 1;
 			}
 			// Diagnosed again after the repair: renaming a duplicate can resolve a dependency finding
