@@ -11,6 +11,7 @@ import {
 	newTaskLockError,
 } from "../file-system/operations.ts";
 import {
+	assertCanDemote,
 	isSymlink,
 	listTaskHomeIds,
 	moveTaskFile,
@@ -159,8 +160,8 @@ interface CreatedTaskWrite {
 	previousContent: Buffer | null;
 	previousIndexEntries?: GitIndexEntry[];
 	generatedIndexEntries?: GitIndexEntry[];
-	/** The `task_home` directory this create made; rollback removes it. */
-	createdHomeDir?: string;
+	/** The `task_home` file this create made in a new directory; rollback unstages it and removes the directory. */
+	createdHome?: string;
 }
 
 interface CreatedTaskRollbackResult {
@@ -1636,12 +1637,8 @@ export class Core {
 			case EntityType.Draft: {
 				// Occupancy includes filename-derived ids: an unparsable file still reserves its
 				// numeric id, so allocation can never reuse what it cannot parse.
-				const [drafts, occupiedFileIds, homeIds] = await Promise.all([
-					this.fs.listDrafts(),
-					this.fs.listOccupiedDraftFileIds(),
-					this.listTaskHomeIds("draft"),
-				]);
-				return [...drafts.map((d) => d.id), ...occupiedFileIds, ...homeIds];
+				const [drafts, occupiedFileIds] = await Promise.all([this.fs.listDrafts(), this.fs.listOccupiedDraftFileIds()]);
+				return [...drafts.map((d) => d.id), ...occupiedFileIds];
 			}
 			case EntityType.Document: {
 				const documents = await this.fs.listDocuments();
@@ -1732,8 +1729,12 @@ export class Core {
 		} else if (stillOwnsCreatedPath && indexRestored) {
 			if (write.previousPath === write.filePath && write.previousContent) {
 				await writeFile(write.filePath, write.previousContent);
-			} else if (write.createdHomeDir) {
-				await removeCreatedTaskHome(write.filePath, write.createdHomeDir);
+			} else if (write.createdHome) {
+				if (write.generatedIndexEntries) {
+					const staged = await this.git.getIndexEntries(write.createdHome);
+					await this.git.restoreIndexEntriesIfMatches(write.createdHome, staged, []);
+				}
+				await removeCreatedTaskHome(write.filePath, dirname(write.createdHome));
 			} else if (
 				write.previousPath &&
 				write.previousContent &&
@@ -1896,8 +1897,8 @@ export class Core {
 					() => true,
 					() => false,
 				);
-			const homeDir = await this.fs.getTaskHomePath(task, isDraft).then((home) => home && dirname(home));
-			const homeDirExisted = homeDir ? await pathExists(homeDir) : true;
+			const home = await this.fs.getTaskHomePath(task, isDraft);
+			const homeDirExisted = home ? await pathExists(dirname(home)) : true;
 			const filePath = await this.writePreparedTask(task, isDraft);
 			const createdContent = await readFile(filePath);
 			const write: CreatedTaskWrite = {
@@ -1906,7 +1907,7 @@ export class Core {
 				previousPath,
 				previousContent,
 				previousIndexEntries,
-				...(homeDir && !homeDirExisted && (await pathExists(homeDir)) && { createdHomeDir: homeDir }),
+				...(home && !homeDirExisted && (await pathExists(home)) && { createdHome: home }),
 			};
 			return {
 				task,
@@ -2803,6 +2804,7 @@ export class Core {
 		autoCommit?: boolean,
 		options: TaskReadOptions = {},
 	): Promise<TaskEditResult> {
+		assertCanDemote(await this.fs.loadConfig());
 		// Editing a task into the Draft status vacates its ID just as `task demote` does, so it
 		// runs the same cleanup rather than leaving dependents pointing at the freed ID.
 		return await this.withVacatedIdCleanup(task, task.id, async (cleanup) => {

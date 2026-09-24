@@ -31,6 +31,11 @@ export function needsDraftPrefixMigration(config: BacklogConfig | null): boolean
  * @returns Updated config with prefixes section added
  */
 export async function migrateDraftPrefixes(fs: FileSystem): Promise<void> {
+	if ((await fs.loadConfig())?.taskHome) {
+		throw new Error(
+			"Draft prefix migration is not supported while task_home is set; remove task_home, run it, then set it again.",
+		);
+	}
 	const draftsDir = await fs.getDraftsDir();
 
 	// Find all task-*.md files in drafts folder

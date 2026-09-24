@@ -4128,7 +4128,6 @@ draftCmd
 	)
 	.option("-s, --status <status>")
 	.option("-l, --labels <labels>", "add draft labels (comma-separated or repeatable)", createMultiValueAccumulator())
-	.option("--slug <slug>", "directory slug for task_home (kebab-case; defaults to the title)")
 	.action(async (title: string, options) => {
 		const cwd = await requireProjectRoot();
 		const core = new Core(cwd);
@@ -4140,7 +4139,6 @@ draftCmd
 				status: "Draft",
 				assignee: parseClearableStringList(options.assignee),
 				labels: parseDelimitedStringList(options.labels),
-				slug: typeof options.slug === "string" ? options.slug : undefined,
 			});
 			console.log(`Created draft ${task.id}`);
 			console.log(`File: ${filePath}`);

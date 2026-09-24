@@ -1,7 +1,8 @@
 import { type FSWatcher, watch as fsWatch } from "node:fs";
-import { lstat, mkdir, readdir, realpath, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, realpath, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative } from "node:path";
-import type { Task } from "../types/index.ts";
+import { parseTask } from "../markdown/parser.ts";
+import type { BacklogConfig, Task } from "../types/index.ts";
 import { escapeRegex } from "../utils/prefix-config.ts";
 
 /*
@@ -83,7 +84,15 @@ export function resolveTaskHome(
 	return taskHomePath(rootDir, pattern, id, slug);
 }
 
+/** Demotion would leave a task's home named for an id it no longer has, so `task_home` forbids it. */
+export function assertCanDemote(config: BacklogConfig | null): void {
+	if (config?.taskHome) {
+		throw new Error("Demoting a task is not supported while task_home is set: its home directory is named for its id.");
+	}
+}
+
 interface RecordWriter {
+	loadConfig(): Promise<BacklogConfig | null>;
 	saveTask(task: Task): Promise<string>;
 	saveDraft(task: Task): Promise<string>;
 	getTaskWritePath(task: Task, isDraft?: boolean): Promise<string>;
@@ -91,8 +100,9 @@ interface RecordWriter {
 
 /**
  * Saves a record under a new id (promote, demote, migration). A linked source moves its link and
- * the record is written through it, so its home stays as it is. A plain source is written anew;
- * `moved: false` tells the caller to remove it.
+ * the record is written through it; a failed save moves the link back. A plain source, or any
+ * source under `task_home` (where a new id gets a new home), is written anew and `moved: false`
+ * tells the caller to remove it.
  */
 export async function saveRelocatedRecord(
 	fs: RecordWriter,
@@ -101,29 +111,41 @@ export async function saveRelocatedRecord(
 	isDraft: boolean,
 ): Promise<{ savedPath: string; moved: boolean }> {
 	const save = (task: Task) => (isDraft ? fs.saveDraft(task) : fs.saveTask(task));
-	if (!(await isSymlink(sourcePath))) return { savedPath: await save(record), moved: false };
+	if (!(await isSymlink(sourcePath)) || (await fs.loadConfig())?.taskHome) {
+		return { savedPath: await save(record), moved: false };
+	}
 	const dest = await fs.getTaskWritePath({ ...record, filePath: undefined }, isDraft);
 	await moveTaskFile(sourcePath, dest);
-	return { savedPath: await save({ ...record, filePath: dest }), moved: true };
+	try {
+		return { savedPath: await save({ ...record, filePath: dest }), moved: true };
+	} catch (error) {
+		await moveTaskFile(dest, sourcePath);
+		throw error;
+	}
 }
 
 function homeGlob(pattern: string): string {
 	return pattern.replaceAll("{ID}", "*").replaceAll("{slug}", "*");
 }
 
-/** Ids of the task homes on disk with this prefix. A home keeps its id taken even with no link. */
-export async function listTaskHomeIds(rootDir: string, pattern: string, prefix: string): Promise<string[]> {
-	const idPattern = `(${escapeRegex(prefix)}-\\d+(?:\\.\\d+)*)`;
+/** Home paths under `pattern` with the id each one's directory names, for ids with `prefix`. */
+async function listTaskHomes(rootDir: string, pattern: string, prefix = "[a-z]+"): Promise<[string, string][]> {
+	const idPattern = `(${prefix}-\\d+(?:\\.\\d+)*)`;
 	const matcher = new RegExp(
 		`^${escapeRegex(pattern).replaceAll(escapeRegex("{ID}"), idPattern).replaceAll(escapeRegex("{slug}"), "[^/]+")}$`,
 		"i",
 	);
-	const ids: string[] = [];
+	const homes: [string, string][] = [];
 	for await (const path of new Bun.Glob(homeGlob(pattern)).scan({ cwd: rootDir })) {
 		const id = path.split("\\").join("/").match(matcher)?.[1];
-		if (id) ids.push(id.toUpperCase());
+		if (id) homes.push([path, id.toUpperCase()]);
 	}
-	return ids;
+	return homes;
+}
+
+/** Ids of the task homes on disk with this prefix. A home keeps its id taken even with no link. */
+export async function listTaskHomeIds(rootDir: string, pattern: string, prefix: string): Promise<string[]> {
+	return (await listTaskHomes(rootDir, pattern, escapeRegex(prefix))).map(([, id]) => id);
 }
 
 /** Adds the real file behind every symlinked path, so a commit carries the link and its content. */
@@ -142,9 +164,11 @@ export async function withLinkTargets(paths: string[]): Promise<string[]> {
 export interface TaskLinkFindings {
 	danglingLinks: string[];
 	unlinkedHomes: string[];
+	/** Homes whose directory names another id than the task inside, as "path (id: X)". */
+	mismatchedHomes: string[];
 }
 
-/** Links in the backlog tree that resolve to nothing, and homes that no link points to. */
+/** Links in the backlog tree that resolve to nothing, homes no link points to, and homes named for another id. */
 export async function diagnoseTaskLinks(
 	rootDir: string,
 	backlogDir: string,
@@ -161,13 +185,23 @@ export async function diagnoseTaskLinks(
 		else danglingLinks.push(relative(rootDir, path));
 	}
 	const unlinkedHomes: string[] = [];
+	const mismatchedHomes: string[] = [];
 	if (pattern) {
 		for await (const home of new Bun.Glob(homeGlob(pattern)).scan({ cwd: rootDir })) {
 			const real = await realpath(join(rootDir, home)).catch(() => null);
 			if (real && !linked.has(real)) unlinkedHomes.push(home);
 		}
+		for (const [home, dirId] of await listTaskHomes(rootDir, pattern)) {
+			const content = await readFile(join(rootDir, home), "utf8").catch(() => null);
+			const taskId = content === null ? "" : (parseTask(content).id ?? "").toUpperCase();
+			if (content !== null && taskId !== dirId) mismatchedHomes.push(`${home} (id: ${taskId || "none"})`);
+		}
 	}
-	return { danglingLinks: danglingLinks.sort(), unlinkedHomes: unlinkedHomes.sort() };
+	return {
+		danglingLinks: danglingLinks.sort(),
+		unlinkedHomes: unlinkedHomes.sort(),
+		mismatchedHomes: mismatchedHomes.sort(),
+	};
 }
 
 export function printTaskLinkReport(findings: TaskLinkFindings): void {
@@ -181,10 +215,15 @@ export function printTaskLinkReport(findings: TaskLinkFindings): void {
 		for (const path of findings.unlinkedHomes) console.log(`  - ${path}`);
 		console.log("Link each one from the backlog tree, or remove it.");
 	}
+	if (findings.mismatchedHomes.length > 0) {
+		console.log("\nTask homes named for another id than the task inside:");
+		for (const path of findings.mismatchedHomes) console.log(`  - ${path}`);
+		console.log("Rename each home directory to match its task id.");
+	}
 }
 
 export function hasTaskLinkFindings(findings: TaskLinkFindings): boolean {
-	return findings.danglingLinks.length > 0 || findings.unlinkedHomes.length > 0;
+	return findings.danglingLinks.length > 0 || findings.unlinkedHomes.length > 0 || findings.mismatchedHomes.length > 0;
 }
 
 export interface TaskLinkWatcher {
@@ -202,8 +241,11 @@ export function watchTaskLinkTargets(dir: string, onChange: (linkName: string) =
 	let targets = new Map<string, Map<string, string[]>>();
 	const watchers = new Map<string, FSWatcher>();
 	let stopped = false;
+	// Only the newest refresh applies its scan, so a slow older one cannot overwrite it.
+	let generation = 0;
 
 	const refresh = async () => {
+		const current = ++generation;
 		const next = new Map<string, Map<string, string[]>>();
 		const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
 		for (const entry of entries) {
@@ -214,7 +256,7 @@ export function watchTaskLinkTargets(dir: string, onChange: (linkName: string) =
 			files.set(basename(target), [...(files.get(basename(target)) ?? []), entry.name]);
 			next.set(dirname(target), files);
 		}
-		if (stopped) return;
+		if (stopped || current !== generation) return;
 		targets = next;
 		for (const [targetDir, watcher] of watchers) {
 			if (next.has(targetDir)) continue;

@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Core } from "../core/backlog.ts";
+import { applyDuplicateTaskIdRepair } from "../core/duplicate-task-repair.ts";
 import { migrateDraftPrefixes } from "../core/prefix-migration.ts";
+import { saveRelocatedRecord } from "../file-system/task-links.ts";
 import {
 	addLinkedTask,
 	BODY,
@@ -127,6 +129,49 @@ describeIfSymlinks("symlinked task files", () => {
 		expect(await linkText(repairedLink)).toBe(`../../${change.title === "Other" ? "D-1-other" : "D-1-alpha"}/task.md`);
 		expect(await read(repairedReal)).toContain(`id: ${change.newId}`);
 		expect(await realFilesInBoard(root)).toEqual([]);
+	});
+
+	it("restores the real file when a repair fails, unless someone changed it since", async () => {
+		const other = await addLinkedTask(root, "D-1-other", taskFile("D-1", "Other"), "d-1 - Other.md");
+		const originals = [await read(alpha.real), await read(other.real)];
+		const failInstall = async () => {
+			throw new Error("install failed");
+		};
+		let plan = await core.previewDuplicateTaskIdRepair();
+		await expect(applyDuplicateTaskIdRepair(core, plan.fingerprint, { installFile: failInstall })).rejects.toThrow(
+			"install failed",
+		);
+		expect([await read(alpha.real), await read(other.real)]).toEqual(originals);
+
+		plan = await core.previewDuplicateTaskIdRepair();
+		const concurrent = async () => {
+			for (const real of [alpha.real, other.real]) await writeFile(real, taskFile("D-1", "Concurrent"));
+			throw new Error("install failed");
+		};
+		await expect(applyDuplicateTaskIdRepair(core, plan.fingerprint, { installFile: concurrent })).rejects.toThrow(
+			"changed after the repair rewrote it",
+		);
+		expect(await read(alpha.real)).toContain("title: Concurrent");
+		expect(await read(other.real)).toContain("title: Concurrent");
+	});
+
+	it("moves a relocated link back when the save fails", async () => {
+		const task = await core.getTask("D-1");
+		if (!task) throw new Error("missing task");
+		const failingWriter = {
+			loadConfig: () => core.filesystem.loadConfig(),
+			getTaskWritePath: (record: typeof task, isDraft?: boolean) => core.filesystem.getTaskWritePath(record, isDraft),
+			saveTask: async () => {
+				throw new Error("save failed");
+			},
+			saveDraft: async () => {
+				throw new Error("save failed");
+			},
+		};
+		const draft = { ...task, id: "DRAFT-1", status: "Draft" };
+		await expect(saveRelocatedRecord(failingWriter, draft, alpha.link, true)).rejects.toThrow("save failed");
+		expect(await linkText(alpha.link)).toBe("../../D-1-alpha/task.md");
+		expect(await linkText(join(root, "tm", "board", "drafts", "draft-1 - Alpha.md"))).toBeNull();
 	});
 
 	it("migrates a linked task- draft to a draft- link", async () => {

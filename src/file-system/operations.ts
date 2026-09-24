@@ -42,7 +42,14 @@ import {
 } from "../utils/task-path.ts";
 import { sortByTaskId } from "../utils/task-sorting.ts";
 import { matchesTaskTypeFilter } from "../utils/task-type-config.ts";
-import { isSymlink, moveTaskFile, resolveTaskHome, saveRelocatedRecord, writeTaskFile } from "./task-links.ts";
+import {
+	assertCanDemote,
+	isSymlink,
+	moveTaskFile,
+	resolveTaskHome,
+	saveRelocatedRecord,
+	writeTaskFile,
+} from "./task-links.ts";
 
 // Interface for task path resolution context
 interface TaskPathContext {
@@ -776,8 +783,9 @@ export class FileSystem {
 		return (await this.resolveTaskWriteTarget(task, isDraft)).filePath;
 	}
 
-	/** Where a new task's real file goes under `task_home`, or null when it is not set. */
+	/** Where a new task's real file goes under `task_home`, or null when it is not set. Drafts have no home. */
 	async getTaskHomePath(task: Task, isDraft = false): Promise<string | null> {
+		if (isDraft) return null;
 		const { id } = await this.resolveTaskWriteTarget(task, isDraft);
 		return resolveTaskHome(this.projectRoot, (await this.loadConfig())?.taskHome, id, task);
 	}
@@ -1220,6 +1228,7 @@ export class FileSystem {
 	}
 
 	async demoteTask(taskId: string, onMoved?: (fromPath: string, toPath: string) => void): Promise<boolean> {
+		assertCanDemote(await this.loadConfig());
 		return await this.withCreateLock(async () => {
 			// Load the task. A missing task is the only false result; filesystem failures must reach
 			// callers so the Web API can distinguish an operational failure from a 404.

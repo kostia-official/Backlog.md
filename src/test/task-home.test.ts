@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdir, readFile, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { $ } from "bun";
 import { Core } from "../core/backlog.ts";
+import { migrateDraftPrefixes } from "../core/prefix-migration.ts";
 import { diagnoseTaskLinks, slugFromTitle } from "../file-system/task-links.ts";
 import { addLinkedTask, linkText, read, realFilesInBoard, taskFile, writeLinkedProject } from "./task-link-fixture.ts";
 import { createUniqueTestDir, isWindows, safeCleanup } from "./test-utils.ts";
@@ -55,30 +56,36 @@ describeIfSymlinks("task_home", () => {
 		expect(await exists(join(root, "tm", "board", "tasks", "d-1 - Bad.md"))).toBe(false);
 	});
 
-	it("gives a new draft its own home, and promotion keeps it", async () => {
-		const { task } = await core.createTaskFromInput({ title: "Idea", status: "Draft" }, false);
-		const home = join(root, "tm", "DRAFT-1-idea", "task.md");
-		expect(await linkText(join(root, "tm", "board", "drafts", "draft-1 - Idea.md"))).toBe("../../DRAFT-1-idea/task.md");
+	it("keeps a draft a plain file and gives it a home named for its task id on promotion", async () => {
+		const { task, filePath } = await core.createTaskFromInput({ title: "Idea", status: "Draft" }, false);
+		expect(await linkText(filePath as string)).toBeNull();
+		expect(await exists(join(root, "tm", "DRAFT-1-idea"))).toBe(false);
 
 		await core.promoteDraft(task.id, false);
-		expect(await linkText(join(root, "tm", "board", "tasks", "d-1 - Idea.md"))).toBe("../../DRAFT-1-idea/task.md");
-		expect(await read(home)).toContain("id: D-1");
-		expect(await exists(join(root, "tm", "D-1-idea"))).toBe(false);
-	});
+		expect(await linkText(join(root, "tm", "board", "tasks", "d-1 - Idea.md"))).toBe("../../D-1-idea/task.md");
+		expect(await read(join(root, "tm", "D-1-idea", "task.md"))).toContain("id: D-1");
+		expect(await exists(filePath as string)).toBe(false);
+		expect(await realFilesInBoard(root)).toEqual([]);
 
-	it("gives a plain draft a home when it is promoted", async () => {
-		await writeFile(join(root, "tm", "board", "drafts", "draft-1 - Plain.md"), taskFile("DRAFT-1", "Plain", "Draft"));
-		await core.promoteDraft("DRAFT-1", false);
-		expect(await linkText(join(root, "tm", "board", "tasks", "d-1 - Plain.md"))).toBe("../../D-1-plain/task.md");
+		await writeFile(join(root, "tm", "board", "drafts", "draft-2 - Plain.md"), taskFile("DRAFT-2", "Plain", "Draft"));
+		await core.editTaskOrDraft("DRAFT-2", { status: "Backlog" }, false);
+		expect(await linkText(join(root, "tm", "board", "tasks", "d-2 - Plain.md"))).toBe("../../D-2-plain/task.md");
 		expect(await realFilesInBoard(root)).toEqual([]);
 	});
 
-	it("keeps the home directory when a linked task is demoted", async () => {
+	it("refuses to demote a task, which would leave its home named for another id", async () => {
 		const alpha = await addLinkedTask(root, "D-1-alpha", taskFile("D-1", "Alpha"), "d-1 - Alpha.md");
-		await core.demoteTask("D-1", false);
-		expect(await linkText(join(root, "tm", "board", "drafts", "draft-1 - Alpha.md"))).toBe("../../D-1-alpha/task.md");
-		expect(await read(alpha.real)).toContain("id: DRAFT-1");
-		expect(await exists(join(root, "tm", "DRAFT-1-alpha"))).toBe(false);
+		const before = await read(alpha.real);
+		await expect(core.demoteTask("D-1", false)).rejects.toThrow("task_home");
+		await expect(core.editTaskOrDraft("D-1", { status: "Draft" }, false)).rejects.toThrow("task_home");
+		await expect(core.filesystem.demoteTask("D-1")).rejects.toThrow("task_home");
+		expect(await read(alpha.real)).toBe(before);
+		expect(await linkText(alpha.link)).toBe("../../D-1-alpha/task.md");
+		expect(await readdir(join(root, "tm", "board", "drafts"))).toEqual([]);
+	});
+
+	it("refuses the draft prefix migration", async () => {
+		await expect(migrateDraftPrefixes(core.filesystem)).rejects.toThrow("task_home");
 	});
 
 	it("never reuses an id held by a home directory with no link", async () => {
@@ -99,6 +106,16 @@ describeIfSymlinks("task_home", () => {
 		expect((await core.filesystem.loadConfig())?.taskHome).toBe("tm/{ID}-{slug}/task.md");
 	});
 
+	it("unstages and removes the home when the create commit fails after staging", async () => {
+		await $`git init -q && git config user.email t@t && git config user.name t`.cwd(root).quiet();
+		core.gitOps.commitFiles = async () => {
+			throw new Error("commit failed");
+		};
+		await expect(core.createTaskFromInput({ title: "Doomed" }, true)).rejects.toThrow("commit failed");
+		expect(await exists(join(root, "tm", "D-1-doomed"))).toBe(false);
+		expect((await $`git ls-files --stage`.cwd(root).quiet()).stdout.toString()).toBe("");
+	});
+
 	it("removes the home it made when the create is rolled back", async () => {
 		await $`git init -q && git config user.email t@t && git config user.name t`.cwd(root).quiet();
 		core.gitOps.addAndCommitTaskFile = async () => {
@@ -109,21 +126,24 @@ describeIfSymlinks("task_home", () => {
 		expect(await linkText(join(root, "tm", "board", "tasks", "d-1 - Doomed.md"))).toBeNull();
 	});
 
-	it("doctor finds a dangling link and a home that no link points to", async () => {
+	it("doctor finds a dangling link, a home no link points to, and a home named for another id", async () => {
 		await addLinkedTask(root, "D-1-alpha", taskFile("D-1", "Alpha"), "d-1 - Alpha.md");
 		await symlink("../../D-2-gone/task.md", join(root, "tm", "board", "tasks", "d-2 - Gone.md"));
 		await mkdir(join(root, "tm", "D-3-lonely"), { recursive: true });
 		await writeFile(join(root, "tm", "D-3-lonely", "task.md"), taskFile("D-3", "Lonely"));
+		await addLinkedTask(root, "D-4-drifted", taskFile("D-5", "Drifted"), "d-5 - Drifted.md");
 
 		const findings = await diagnoseTaskLinks(root, core.filesystem.backlogDir, "tm/{ID}-{slug}/task.md");
 		expect(findings).toEqual({
 			danglingLinks: ["tm/board/tasks/d-2 - Gone.md"],
 			unlinkedHomes: ["tm/D-3-lonely/task.md"],
+			mismatchedHomes: ["tm/D-4-drifted/task.md (id: D-5)"],
 		});
 
 		const cli = await $`bun ${join(process.cwd(), "src", "cli.ts")} doctor`.cwd(root).quiet().nothrow();
 		expect(cli.exitCode).toBe(1);
 		expect(cli.stdout.toString()).toContain("tm/board/tasks/d-2 - Gone.md");
 		expect(cli.stdout.toString()).toContain("tm/D-3-lonely/task.md");
+		expect(cli.stdout.toString()).toContain("tm/D-4-drifted/task.md (id: D-5)");
 	});
 });

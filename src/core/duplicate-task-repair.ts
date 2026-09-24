@@ -633,7 +633,7 @@ export async function applyDuplicateTaskIdRepair(
 		);
 
 		const staged: string[] = [];
-		const rewrittenLinkTargets: Array<{ path: string; content: string }> = [];
+		const rewrittenLinkTargets: Array<{ path: string; original: string; written: string }> = [];
 		const stagedIdentities = new Map<string, FileOwnershipIdentity>();
 		const backups: Array<{ sourcePath: string; backupPath: string }> = [];
 		const installed: InstalledRepairFile[] = [];
@@ -647,7 +647,7 @@ export async function applyDuplicateTaskIdRepair(
 				if (item.linkTarget) {
 					// A linked task keeps its real file: the id changes there and only the link moves.
 					await Bun.write(item.linkTarget, item.content);
-					rewrittenLinkTargets.push({ path: item.linkTarget, content: item.originalContent });
+					rewrittenLinkTargets.push({ path: item.linkTarget, original: item.originalContent, written: item.content });
 					const stagedDir = await realpath(dirname(item.stagedPath));
 					await symlink(relative(stagedDir, item.linkTarget), item.stagedPath);
 				} else {
@@ -705,7 +705,14 @@ export async function applyDuplicateTaskIdRepair(
 			}
 			for (const path of staged) await removeIfPresent(path).catch(() => {});
 			for (const target of rewrittenLinkTargets) {
-				await Bun.write(target.path, target.content).catch((rollbackError) =>
+				const current = await Bun.file(target.path)
+					.text()
+					.catch(() => null);
+				if (current !== target.written) {
+					rollbackIssues.push(`${target.path} changed after the repair rewrote it, so it was left as it is.`);
+					continue;
+				}
+				await Bun.write(target.path, target.original).catch((rollbackError) =>
 					rollbackIssues.push(`Could not restore ${target.path}: ${errorMessage(rollbackError)}.`),
 				);
 			}

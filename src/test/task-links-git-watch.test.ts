@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rename, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { $ } from "bun";
 import { Core } from "../core/backlog.ts";
@@ -105,6 +105,29 @@ describeIfSymlinks("symlinked tasks in git and watchers", () => {
 			await watcher.refresh();
 			await writeFile(alpha.real, taskFile("D-1", "Alpha edited"));
 			await waitFor(() => seen.includes("d-1 - Alpha.md"));
+		} finally {
+			watcher.stop();
+		}
+	});
+
+	it("keeps the newest scan when refreshes overlap", async () => {
+		await writeLinkedProject(root);
+		const alpha = await addLinkedTask(root, "D-1-alpha", taskFile("D-1", "Alpha"), "d-1 - Alpha.md");
+		const dir = join(root, "links");
+		await mkdir(dir, { recursive: true });
+		for (let i = 0; i < 300; i++) await symlink(alpha.real, join(dir, `link-${i}.md`));
+		const seen: string[] = [];
+		const watcher = watchTaskLinkTargets(dir, (name) => seen.push(name));
+		try {
+			await watcher.refresh();
+			const stale = watcher.refresh();
+			await sleep(5);
+			await rename(dir, `${dir}-old`);
+			await mkdir(dir);
+			await Promise.all([stale, watcher.refresh()]);
+			await writeFile(alpha.real, taskFile("D-1", "Alpha edited"));
+			await sleep(300);
+			expect(seen).toEqual([]);
 		} finally {
 			watcher.stop();
 		}
