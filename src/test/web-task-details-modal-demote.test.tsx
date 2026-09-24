@@ -58,6 +58,7 @@ async function renderModal(
 	task: Task,
 	props: {
 		isDraftMode?: boolean;
+		hasTaskHome?: boolean;
 		isOpen?: boolean;
 		onClose?: () => void;
 		onSaved?: () => Promise<void> | void;
@@ -70,6 +71,7 @@ async function renderModal(
 					task={task}
 					isOpen={props.isOpen ?? true}
 					isDraftMode={props.isDraftMode}
+					hasTaskHome={props.hasTaskHome}
 					onClose={props.onClose ?? (() => {})}
 					onSaved={props.onSaved}
 				/>
@@ -119,14 +121,15 @@ describe("Web task demotion", () => {
 
 	it("hides the action when demotion is not applicable", async () => {
 		const container = setupDom();
-		const inapplicable: Array<{ task: Task; isDraftMode?: boolean }> = [
+		const inapplicable: Array<{ task: Task; isDraftMode?: boolean; hasTaskHome?: boolean }> = [
+			{ task: localTask, hasTaskHome: true },
 			{ task: { ...localTask, id: "DRAFT-1", status: "Draft" }, isDraftMode: true },
 			{ task: { ...localTask, source: "completed" } },
 			{ task: { ...localTask, source: "local-branch", branch: "tasks/elsewhere" } },
 		];
 
 		for (const candidate of inapplicable) {
-			await renderModal(candidate.task, { isDraftMode: candidate.isDraftMode });
+			await renderModal(candidate.task, { isDraftMode: candidate.isDraftMode, hasTaskHome: candidate.hasTaskHome });
 			expect(findDemoteButton(container), candidate.task.id).toBeUndefined();
 		}
 	});

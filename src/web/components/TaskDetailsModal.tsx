@@ -42,6 +42,7 @@ interface Props {
   definitionOfDoneDefaults?: string[];
   defaultAssignee?: string[];
   dateFormat?: string;
+  hasTaskHome?: boolean; // task_home is set, so demotion is not offered
 }
 
 type Mode = "preview" | "edit" | "create";
@@ -197,6 +198,7 @@ export const TaskDetailsModal: React.FC<Props> = ({
   definitionOfDoneDefaults,
   defaultAssignee,
   dateFormat,
+  hasTaskHome,
 }) => {
   const { theme } = useTheme();
   const isCreateMode = !task;
@@ -1113,7 +1115,7 @@ export const TaskDetailsModal: React.FC<Props> = ({
   const definitionTotalCount = (definitionOfDone || []).length;
 	const isDoneStatus = (status || "").toLowerCase().includes("done");
 	const canDemote = Boolean(
-		task && !isDraftMode && !isOpenDraft && isLocalEditableTask(task) && task.source !== "completed" && !isFromOtherBranch,
+		task && !isDraftMode && !isOpenDraft && isLocalEditableTask(task) && task.source !== "completed" && !isFromOtherBranch && !hasTaskHome,
 	);
   const comments = displayComments;
 
