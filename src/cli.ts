@@ -4245,8 +4245,9 @@ draftCmd
 		const core = new Core(cwd);
 		try {
 			// Same as archive: the argument selects the file, so it must not be re-resolved by ID.
-			if (await core.promoteDraft(taskId)) {
-				console.log(`Promoted draft ${normalizeId(taskId, DRAFT_PREFIX)}`);
+			let newTaskId = "";
+			if (await core.promoteDraft(taskId, undefined, (id) => (newTaskId = id))) {
+				console.log(`Promoted draft ${normalizeId(taskId, DRAFT_PREFIX)} to ${newTaskId}`);
 			} else {
 				console.error(`Draft ${taskId} not found.`);
 				process.exitCode = 1;

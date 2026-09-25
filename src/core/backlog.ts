@@ -3528,7 +3528,7 @@ export class Core {
 		return moved !== null;
 	}
 
-	async promoteDraft(draftId: string, autoCommit?: boolean): Promise<boolean> {
+	async promoteDraft(draftId: string, autoCommit?: boolean, onPromoted?: (taskId: string) => void): Promise<boolean> {
 		// Whole-file operation: filename binding decides which file is promoted, so resolution
 		// goes through the file resolver and frontmatter equivalence is not required.
 		const sourcePath = await this.fs.resolveDraftFilePath(draftId);
@@ -3540,7 +3540,7 @@ export class Core {
 		// from the promoted task or leave both records on disk. Draft lock first, create lock
 		// second: nothing acquires them in the opposite order, so this cannot deadlock.
 		return await this.fs.withDraftLock({ filePath: sourcePath, canonicalId }, async () => {
-			let moved: { previousPath: string; savedPath: string } | null = null;
+			let moved: { previousPath: string; savedPath: string; taskId: string } | null = null;
 			try {
 				moved = await this.withCreateLock(async () => {
 					const draft = await this.fs.loadDraftFromFile(sourcePath);
@@ -3569,7 +3569,7 @@ export class Core {
 						this.contentStore.upsertTask(savedTask);
 					}
 
-					return { previousPath: sourcePath, savedPath };
+					return { previousPath: sourcePath, savedPath, taskId: promotedTask.id };
 				});
 			} catch (error) {
 				// A missing draft is the only thing "false" may mean here; a config value Backlog refuses to
@@ -3588,6 +3588,7 @@ export class Core {
 				);
 			}
 
+			if (moved) onPromoted?.(moved.taskId);
 			return moved !== null;
 		});
 	}
