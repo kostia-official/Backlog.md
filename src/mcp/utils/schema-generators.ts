@@ -1,4 +1,5 @@
 import { DEFAULT_STATUSES } from "../../constants/index.ts";
+import { MCP_POSITION_FIELD } from "../../core/task-position.ts";
 import type { BacklogConfig } from "../../types/index.ts";
 import { getPriorityLabels } from "../../utils/priority-config.ts";
 import { getProjectValues } from "../../utils/project-config.ts";
@@ -183,6 +184,7 @@ export function generateTaskCreateSchema(config: BacklogConfig): JsonSchema {
 				description:
 					"Optional non-negative ordering value for manual task ordering. Lower values sort earlier. Prefer spaced integers such as 1000, 2000, 3000 to leave room for inserts.",
 			},
+			position: MCP_POSITION_FIELD,
 			milestone: {
 				type: "string",
 				minLength: 1,
@@ -310,6 +312,7 @@ export function generateTaskEditSchema(config: BacklogConfig): JsonSchema {
 				description:
 					"Set task ordinal for manual ordering. Lower values sort earlier. Prefer spaced integers such as 1000, 2000, 3000 to leave room for inserts.",
 			},
+			position: MCP_POSITION_FIELD,
 			milestone: {
 				type: "string",
 				minLength: 1,

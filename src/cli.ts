@@ -26,6 +26,14 @@ import { type DuplicateRepairPlan, findLocalDuplicateTaskIds } from "./core/dupl
 import { initializeProject } from "./core/init.ts";
 import { buildMilestoneBuckets, collectArchivedMilestoneKeys, milestoneKey } from "./core/milestones.ts";
 import { loadTaskDetail, loadTaskListItems } from "./core/task-detail.ts";
+import {
+	checkPlacement,
+	type PlacementResult,
+	placementFlag,
+	placementFromCliOptions,
+	placeTasks,
+	printPlacement,
+} from "./core/task-position.ts";
 import { isConfigValueError } from "./file-system/operations.ts";
 import { diagnoseTaskLinks, hasTaskLinkFindings, printTaskLinkReport } from "./file-system/task-links.ts";
 import {
@@ -568,9 +576,29 @@ function hasCreateFieldFlags(options: Record<string, unknown>): boolean {
 			options.dep !== undefined ||
 			options.ref !== undefined ||
 			options.doc !== undefined ||
-			options.modifiedFile !== undefined,
+			options.modifiedFile !== undefined ||
+			hasPlacementFlag(options),
 	);
 }
+
+function hasPlacementFlag(options: Record<string, unknown>): boolean {
+	return Boolean(options.top || options.bottom || options.before !== undefined || options.after !== undefined);
+}
+
+function addPlacementOptions(cmd: Command) {
+	return cmd
+		.option("--top", "place the listed tasks, in the order given, at the top of their column")
+		.option("--bottom", "place the listed tasks, in the order given, at the bottom of their column")
+		.option("--before <taskId>", "place the listed tasks right before this task, in its column")
+		.option("--after <taskId>", "place the listed tasks right after this task, in its column");
+}
+
+const PLACEMENT_HELP = [
+	{ name: "top", type: "Boolean", description: "Place the tasks, in the order given, at the top of the column" },
+	{ name: "bottom", type: "Boolean", description: "Place the tasks, in the order given, at the bottom of the column" },
+	{ name: "before", type: "Task ID", description: "Place the tasks right before this task; -s must match its status" },
+	{ name: "after", type: "Task ID", description: "Place the tasks right after this task; -s must match its status" },
+];
 
 function hasEditFieldFlags(options: Record<string, unknown>): boolean {
 	return Boolean(
@@ -620,7 +648,8 @@ function hasEditFieldFlags(options: Record<string, unknown>): boolean {
 			options.clearRefs ||
 			options.doc !== undefined ||
 			options.clearDocs ||
-			options.modifiedFile !== undefined,
+			options.modifiedFile !== undefined ||
+			hasPlacementFlag(options),
 	);
 }
 
@@ -1904,6 +1933,7 @@ addHelpSchema(taskCmd.command("create [title]"), {
 		{ name: "slug", type: "kebab-case", description: "Directory slug for task_home; defaults to the title" },
 		{ name: "acceptanceCriteria", type: "Markdown list item text", description: "Repeat --ac for multiple criteria" },
 		{ name: "ordinal", type: "Integer", description: "Non-negative manual ordering value" },
+		...PLACEMENT_HELP,
 		{ name: "parent", type: "Task ID", description: "Existing parent task for subtasks; not a milestone ID" },
 		{
 			name: "plan",
@@ -1958,6 +1988,10 @@ addHelpSchema(taskCmd.command("create [title]"), {
 	.option("--ordinal <number>", "set task ordinal for custom ordering")
 	.option("-m, --milestone <milestone>", "assign task to milestone by ID or title")
 	.option("--draft")
+	.option("--top", "place the new task at the top of its column")
+	.option("--bottom", "place the new task at the bottom of its column")
+	.option("--before <taskId>", "place the new task right before this task")
+	.option("--after <taskId>", "place the new task right after this task")
 	.option("-p, --parent <taskId>", "specify existing parent task ID, not a milestone ID")
 	.option(
 		"--depends-on <taskIds>",
@@ -2032,6 +2066,17 @@ addHelpSchema(taskCmd.command("create [title]"), {
 		const usePlainOutput = isPlainRequested(options);
 		let ordinalValue: number | undefined;
 
+		let placement: ReturnType<typeof placementFromCliOptions>;
+		try {
+			placement = placementFromCliOptions(options);
+			const status = createAsDraft ? "Draft" : options.status;
+			if (placement) await checkPlacement(core, { taskIds: [], placement, status });
+		} catch (error) {
+			console.error(error instanceof Error ? error.message : String(error));
+			process.exitCode = 1;
+			return;
+		}
+
 		if (options.ordinal !== undefined) {
 			const parsed = Number(options.ordinal);
 			if (!Number.isFinite(parsed) || parsed < 0) {
@@ -2081,19 +2126,27 @@ addHelpSchema(taskCmd.command("create [title]"), {
 				disableDefinitionOfDoneDefaults: options.dodDefaults === false,
 			});
 
-			if (usePlainOutput) {
-				console.log(formatTaskPlainText(await loadTaskDetail(core, task), { filePathOverride: filePath }));
-				return;
-			}
-
-			if (createAsDraft) {
-				console.log(`Created draft ${task.id}`);
+			// A failed placement leaves the created task at the bottom of its column.
+			let placed: PlacementResult | undefined;
+			try {
+				if (placement) placed = await placeTasks(core, { taskIds: [task.id], placement, status: options.status });
+			} catch (error) {
+				console.log(`Created task ${task.id}`);
 				console.log(`File: ${filePath}`);
+				console.error(error instanceof Error ? error.message : String(error));
+				if (placement) console.error(`Place it with: backlog task edit ${task.id} ${placementFlag(placement)}`);
+				process.exitCode = 1;
 				return;
 			}
 
-			console.log(`Created task ${task.id}`);
-			console.log(`File: ${filePath}`);
+			if (usePlainOutput) {
+				const shown = placed ? ((await core.loadTaskById(task.id)) ?? task) : task;
+				console.log(formatTaskPlainText(await loadTaskDetail(core, shown), { filePathOverride: filePath }));
+			} else {
+				console.log(`Created ${createAsDraft ? "draft" : "task"} ${task.id}`);
+				console.log(`File: ${filePath}`);
+			}
+			if (placed && placed.writtenIds.length > 0) printPlacement(placed);
 		} catch (error) {
 			console.error(error instanceof Error ? error.message : String(error));
 			process.exitCode = 1;
@@ -3099,6 +3152,14 @@ const draftEditTarget: EditCommandTarget = {
 };
 
 async function runEditCommand(target: EditCommandTarget, requestedIds: string[] | undefined, options: OptionValues) {
+	let placement: ReturnType<typeof placementFromCliOptions>;
+	try {
+		placement = placementFromCliOptions(options);
+	} catch (error) {
+		console.error(error instanceof Error ? error.message : String(error));
+		process.exitCode = 1;
+		return;
+	}
 	// Listing the same task twice is a slip, not a request to edit it twice, so identities that
 	// compare equal collapse to the first spelling the user typed. Canonical identity keeps a bare
 	// number on the default prefix, so "7" cannot swallow an explicit "JIRA-7".
@@ -3138,6 +3199,18 @@ async function runEditCommand(target: EditCommandTarget, requestedIds: string[] 
 
 	const cwd = await requireProjectRoot();
 	const core = new Core(cwd);
+
+	// Placement checks see the IDs as typed, so a repeated ID is an error rather than deduplicated.
+	if (placement) {
+		const placementIds = (requestedIds ?? []).map(String).filter((id) => id.trim());
+		try {
+			await checkPlacement(core, { taskIds: placementIds, placement, status: options.status });
+		} catch (error) {
+			console.error(error instanceof Error ? error.message : String(error));
+			process.exitCode = 1;
+			return;
+		}
+	}
 
 	if (shouldUseWizard) {
 		let selectedTaskId = taskId?.trim() || undefined;
@@ -3399,7 +3472,7 @@ async function runEditCommand(target: EditCommandTarget, requestedIds: string[] 
 	if (descriptionOption !== undefined) {
 		editArgs.description = String(descriptionOption);
 	}
-	if (canonicalStatus) {
+	if (canonicalStatus && !placement) {
 		editArgs.status = canonicalStatus;
 	}
 	if (normalizedPriority) {
@@ -3517,7 +3590,7 @@ async function runEditCommand(target: EditCommandTarget, requestedIds: string[] 
 		editArgs.definitionOfDoneUncheck = uncheckDod;
 	}
 
-	if (taskIds.length === 1) {
+	if (taskIds.length === 1 && !placement) {
 		let updatedTask: Task;
 		try {
 			updatedTask = await target.update(core, existingTask, buildTaskUpdateInput(editArgs));
@@ -3539,7 +3612,7 @@ async function runEditCommand(target: EditCommandTarget, requestedIds: string[] 
 	// A batch writes the same change to independent files, so one failure must not stop the rest.
 	// The outcome of each task is the useful output here, so a batch reports one line per task
 	// rather than repeating a full task body for every ID.
-	for (const task of resolvedTasks) {
+	for (const task of !placement || Object.keys(editArgs).length > 0 ? resolvedTasks : []) {
 		try {
 			const updated = await target.update(core, task, buildTaskUpdateInput(editArgs));
 			console.log(`Updated ${target.label.toLowerCase()} ${updated.id}`);
@@ -3553,6 +3626,21 @@ async function runEditCommand(target: EditCommandTarget, requestedIds: string[] 
 	}
 	if (editFailures.length > 0) {
 		process.exitCode = 1;
+	}
+
+	// The placement writes the status with the ordinal, for the tasks whose field edit succeeded.
+	const placedIds = resolvedTasks.map((task) => task.id).filter((id) => !editFailures.some((f) => f.taskId === id));
+	if (placement && placedIds.length > 0) {
+		try {
+			printPlacement(await placeTasks(core, { taskIds: placedIds, placement, status: canonicalStatus }));
+		} catch (error) {
+			console.error(error instanceof Error ? error.message : String(error));
+			process.exitCode = 1;
+			return;
+		}
+		const placedTask = taskIds.length === 1 ? await core.loadTaskById(placedIds[0] as string) : null;
+		if (placedTask && isPlainRequested(options))
+			console.log(formatTaskPlainText(await loadTaskDetail(core, placedTask)));
 	}
 }
 
@@ -3786,6 +3874,7 @@ const taskEditCommand = addHelpSchema(taskCmd.command("edit [taskIds...]"), {
 		{ name: "final-summary", type: "Markdown", description: "Completion summary" },
 		{ name: "append-final-summary", type: "Markdown", description: "Append to final summary; repeatable" },
 		{ name: "check-ac", type: "Integer", description: "1-based acceptance criterion index" },
+		...PLACEMENT_HELP,
 	],
 	writes: "Updates task metadata and structured task sections through Backlog.md",
 	output: "Updated task details; use --plain for text output",
@@ -3794,9 +3883,10 @@ const taskEditCommand = addHelpSchema(taskCmd.command("edit [taskIds...]"), {
 		`backlog task edit {{TASK_ID:1}} --type ${TASK_TYPE_EXAMPLE}`,
 		"backlog task edit {{TASK_ID:1}} --check-ac 1",
 		'backlog task edit {{TASK_ID:1}} {{TASK_ID:2}} --status "<active status>"',
+		"backlog task edit {{TASK_ID:2}} {{TASK_ID:1}} --top",
 	],
 }).description("edit an existing task");
-addEditFieldOptions(taskEditCommand).action(async (taskIds: string[] | undefined, options) => {
+addPlacementOptions(addEditFieldOptions(taskEditCommand)).action(async (taskIds: string[] | undefined, options) => {
 	await runEditCommand(taskEditTarget, taskIds, options);
 });
 

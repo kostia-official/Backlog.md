@@ -3,6 +3,8 @@ export interface TaskEditArgs {
 	dueDate?: string | null;
 	description?: string;
 	status?: string;
+	/** top, bottom, before:<ID> or after:<ID>; MCP only. */
+	position?: string;
 	priority?: string;
 	type?: string;
 	project?: string;

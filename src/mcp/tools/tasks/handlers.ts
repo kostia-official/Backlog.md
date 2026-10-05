@@ -3,6 +3,7 @@ import { DEFAULT_STATUSES } from "../../../constants/index.ts";
 import type { VacatedTaskResult } from "../../../core/backlog.ts";
 import { findLocalDuplicateTaskIds } from "../../../core/duplicate-task-repair.ts";
 import { loadTaskDetail, loadTaskListItems } from "../../../core/task-detail.ts";
+import { checkPlacement, mcpPlacement, placeTasks } from "../../../core/task-position.ts";
 import { isCreateLockError, isTaskLockError } from "../../../file-system/operations.ts";
 import {
 	isLocalEditableTask,
@@ -51,6 +52,7 @@ export type TaskCreateArgs = {
 	documentation?: string[];
 	modifiedFiles?: string[];
 	finalSummary?: string;
+	position?: string;
 };
 
 export type TaskListArgs = {
@@ -138,6 +140,8 @@ export class TaskHandlers {
 
 			const milestone =
 				typeof args.milestone === "string" ? await this.resolveMilestoneInput(args.milestone) : undefined;
+			const placement = mcpPlacement(args);
+			if (placement) await checkPlacement(this.core, { taskIds: [], placement, status: args.status });
 
 			const { task: createdTask } = await this.core.createTaskFromInput({
 				title: args.title,
@@ -162,8 +166,10 @@ export class TaskHandlers {
 				definitionOfDoneAdd: args.definitionOfDoneAdd,
 				disableDefinitionOfDoneDefaults: args.disableDefinitionOfDoneDefaults,
 			});
+			if (placement) await placeTasks(this.core, { taskIds: [createdTask.id], placement, status: args.status });
 
-			return await formatTaskCallResult(await loadTaskDetail(this.core, createdTask));
+			const shown = placement ? await this.loadTaskOrThrow(createdTask.id) : createdTask;
+			return await formatTaskCallResult(await loadTaskDetail(this.core, shown));
 		} catch (error) {
 			if (isCreateLockError(error)) {
 				throw new BacklogToolError(error.message, "OPERATION_FAILED");
@@ -551,11 +557,20 @@ export class TaskHandlers {
 				throw new BacklogToolError("Ordinal must be a non-negative number.", "VALIDATION_ERROR");
 			}
 
-			const updateInput = buildTaskUpdateInput(args);
+			// With a position, the placement writes the status together with the ordinal.
+			const placement = mcpPlacement(args);
+			if (placement) await checkPlacement(this.core, { taskIds: [args.id], placement, status: args.status });
+			const updateInput = buildTaskUpdateInput(placement ? { ...args, status: undefined } : args);
 			if (typeof updateInput.milestone === "string") {
 				updateInput.milestone = await this.resolveMilestoneInput(updateInput.milestone);
 			}
-			const { task: updatedTask, cleanedTaskIds } = await this.core.editTaskOrDraft(args.id, updateInput);
+			const edited =
+				placement && Object.keys(updateInput).length === 0
+					? { task: await this.loadTaskOrThrow(args.id), cleanedTaskIds: [] }
+					: await this.core.editTaskOrDraft(args.id, updateInput);
+			if (placement) await placeTasks(this.core, { taskIds: [edited.task.id], placement, status: args.status });
+			const updatedTask = placement ? await this.loadTaskOrThrow(edited.task.id) : edited.task;
+			const cleanedTaskIds = edited.cleanedTaskIds;
 			const cleanupMessage = formatDependencyCleanupMessage(args.id, cleanedTaskIds);
 			return await formatTaskCallResult(
 				await loadTaskDetail(this.core, updatedTask),
