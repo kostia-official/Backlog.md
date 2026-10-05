@@ -1982,13 +1982,21 @@ export class Core {
 		const oldStatus = originalTask?.status ?? "";
 		const newStatus = task.status ?? "";
 		const statusChanged = oldStatus !== newStatus;
+		const now = new Date().toISOString().slice(0, 16).replace("T", " ");
 
 		if (hasUpdatedDateRelevantChanges(originalTask, task)) {
-			task.updatedDate = new Date().toISOString().slice(0, 16).replace("T", " ");
+			task.updatedDate = now;
 		} else if (originalTask?.updatedDate) {
 			task.updatedDate = originalTask.updatedDate;
 		} else {
 			delete task.updatedDate;
+		}
+
+		// done_date is the last time the task entered the last configured status; leaving it clears the date.
+		if (statusChanged) {
+			const statuses = (await this.fs.loadConfig())?.statuses ?? DEFAULT_STATUSES;
+			if (newStatus === statuses.at(-1)) task.doneDate = now;
+			else delete task.doneDate;
 		}
 
 		const filePath = await this.fs.saveTask(task);

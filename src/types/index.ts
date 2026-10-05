@@ -51,6 +51,7 @@ export interface Task {
 	reporter?: string;
 	createdDate: string;
 	updatedDate?: string;
+	doneDate?: string;
 	dueDate?: string;
 	labels: string[];
 	milestone?: string;

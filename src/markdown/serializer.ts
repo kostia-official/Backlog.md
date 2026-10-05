@@ -56,6 +56,7 @@ export function serializeTask(task: Task): string {
 		...(task.reporter && { reporter: task.reporter }),
 		created_date: task.createdDate,
 		...(task.updatedDate && { updated_date: task.updatedDate }),
+		...(task.doneDate && { done_date: task.doneDate }),
 		...(task.dueDate && { due_date: task.dueDate }),
 		labels: task.labels,
 		...(task.milestone && { milestone: task.milestone }),
