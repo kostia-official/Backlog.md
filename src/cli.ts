@@ -28,6 +28,7 @@ import { buildMilestoneBuckets, collectArchivedMilestoneKeys, milestoneKey } fro
 import { loadTaskDetail, loadTaskListItems } from "./core/task-detail.ts";
 import {
 	checkPlacement,
+	hasPlacementFlag,
 	type PlacementResult,
 	placementFlag,
 	placementFromCliOptions,
@@ -579,10 +580,6 @@ function hasCreateFieldFlags(options: Record<string, unknown>): boolean {
 			options.modifiedFile !== undefined ||
 			hasPlacementFlag(options),
 	);
-}
-
-function hasPlacementFlag(options: Record<string, unknown>): boolean {
-	return Boolean(options.top || options.bottom || options.before !== undefined || options.after !== undefined);
 }
 
 function addPlacementOptions(cmd: Command) {
@@ -2066,11 +2063,13 @@ addHelpSchema(taskCmd.command("create [title]"), {
 		const usePlainOutput = isPlainRequested(options);
 		let ordinalValue: number | undefined;
 
+		// With a placement, the task is created straight in its target column.
 		let placement: ReturnType<typeof placementFromCliOptions>;
+		let placementStatus: string | undefined;
 		try {
 			placement = placementFromCliOptions(options);
 			const status = createAsDraft ? "Draft" : options.status;
-			if (placement) await checkPlacement(core, { taskIds: [], placement, status });
+			if (placement) placementStatus = (await checkPlacement(core, { taskIds: [], placement, status })).targetStatus;
 		} catch (error) {
 			console.error(error instanceof Error ? error.message : String(error));
 			process.exitCode = 1;
@@ -2103,7 +2102,7 @@ addHelpSchema(taskCmd.command("create [title]"), {
 			const { task, filePath } = await core.createTaskFromInput({
 				title: title ?? "",
 				description: options.description || options.desc ? String(options.description || options.desc) : undefined,
-				status: createAsDraft ? "Draft" : options.status ? String(options.status) : undefined,
+				status: createAsDraft ? "Draft" : (placementStatus ?? (options.status ? String(options.status) : undefined)),
 				dueDate: typeof options.dueDate === "string" ? options.dueDate : undefined,
 				assignee: parseClearableStringList(options.assignee),
 				labels: parseDelimitedStringList(options.labels),
@@ -2129,7 +2128,7 @@ addHelpSchema(taskCmd.command("create [title]"), {
 			// A failed placement leaves the created task at the bottom of its column.
 			let placed: PlacementResult | undefined;
 			try {
-				if (placement) placed = await placeTasks(core, { taskIds: [task.id], placement, status: options.status });
+				if (placement) placed = await placeTasks(core, { taskIds: [task.id], placement, status: placementStatus });
 			} catch (error) {
 				console.log(`Created task ${task.id}`);
 				console.log(`File: ${filePath}`);
@@ -2140,13 +2139,14 @@ addHelpSchema(taskCmd.command("create [title]"), {
 			}
 
 			if (usePlainOutput) {
+				if (placed && placed.writtenIds.length > 0) printPlacement(placed);
 				const shown = placed ? ((await core.loadTaskById(task.id)) ?? task) : task;
 				console.log(formatTaskPlainText(await loadTaskDetail(core, shown), { filePathOverride: filePath }));
 			} else {
 				console.log(`Created ${createAsDraft ? "draft" : "task"} ${task.id}`);
 				console.log(`File: ${filePath}`);
+				if (placed && placed.writtenIds.length > 0) printPlacement(placed);
 			}
-			if (placed && placed.writtenIds.length > 0) printPlacement(placed);
 		} catch (error) {
 			console.error(error instanceof Error ? error.message : String(error));
 			process.exitCode = 1;
@@ -3201,10 +3201,11 @@ async function runEditCommand(target: EditCommandTarget, requestedIds: string[] 
 	const core = new Core(cwd);
 
 	// Placement checks see the IDs as typed, so a repeated ID is an error rather than deduplicated.
+	let placementPlan: Awaited<ReturnType<typeof checkPlacement>> | undefined;
 	if (placement) {
 		const placementIds = (requestedIds ?? []).map(String).filter((id) => id.trim());
 		try {
-			await checkPlacement(core, { taskIds: placementIds, placement, status: options.status });
+			placementPlan = await checkPlacement(core, { taskIds: placementIds, placement, status: options.status });
 		} catch (error) {
 			console.error(error instanceof Error ? error.message : String(error));
 			process.exitCode = 1;
@@ -3612,10 +3613,13 @@ async function runEditCommand(target: EditCommandTarget, requestedIds: string[] 
 	// A batch writes the same change to independent files, so one failure must not stop the rest.
 	// The outcome of each task is the useful output here, so a batch reports one line per task
 	// rather than repeating a full task body for every ID.
-	for (const task of !placement || Object.keys(editArgs).length > 0 ? resolvedTasks : []) {
+	// With a placement, a single --plain edit prints only the placement and the task view.
+	const hasFieldEdit = Object.keys(editArgs).length > 0;
+	for (const task of !placement || hasFieldEdit ? resolvedTasks : []) {
 		try {
 			const updated = await target.update(core, task, buildTaskUpdateInput(editArgs));
-			console.log(`Updated ${target.label.toLowerCase()} ${updated.id}`);
+			if (!placement || taskIds.length > 1 || !isPlainRequested(options))
+				console.log(`Updated ${target.label.toLowerCase()} ${updated.id}`);
 		} catch (error) {
 			editFailures.push({ taskId: task.id, message: formatTaskEditError(error, task.id, target.label.toLowerCase()) });
 		}
@@ -3632,7 +3636,8 @@ async function runEditCommand(target: EditCommandTarget, requestedIds: string[] 
 	const placedIds = resolvedTasks.map((task) => task.id).filter((id) => !editFailures.some((f) => f.taskId === id));
 	if (placement && placedIds.length > 0) {
 		try {
-			printPlacement(await placeTasks(core, { taskIds: placedIds, placement, status: canonicalStatus }));
+			const args = { taskIds: placedIds, placement, status: canonicalStatus };
+			printPlacement(await placeTasks(core, args, hasFieldEdit ? undefined : placementPlan));
 		} catch (error) {
 			console.error(error instanceof Error ? error.message : String(error));
 			process.exitCode = 1;

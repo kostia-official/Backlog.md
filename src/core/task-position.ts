@@ -27,9 +27,14 @@ export function parsePlacement(value: string): Placement {
 	throw new Error(`Invalid position "${value}". Use top, bottom, before:<ID> or after:<ID>.`);
 }
 
+const givenFlags = (options: Record<string, unknown>) =>
+	PLACEMENT_FLAGS.filter((flag) => options[flag] !== undefined && options[flag] !== false);
+
+export const hasPlacementFlag = (options: Record<string, unknown>): boolean => givenFlags(options).length > 0;
+
 /** Reads --top/--bottom/--before/--after; throws when they conflict with each other or with --ordinal. */
 export function placementFromCliOptions(options: Record<string, unknown>): Placement | undefined {
-	const given = PLACEMENT_FLAGS.filter((flag) => options[flag] !== undefined && options[flag] !== false);
+	const given = givenFlags(options);
 	if (given.length === 0) return undefined;
 	if (options.ordinal !== undefined) {
 		throw new Error("--ordinal cannot be combined with --top/--bottom/--before/--after.");
@@ -117,6 +122,7 @@ export async function checkPlacement(
 	if (targetStatus && /done|complete/i.test(targetStatus)) {
 		problems.push(`Placement into "${targetStatus}" is not supported; that column sorts by date.`);
 	}
+	if (problems.length === 0 && !targetStatus) problems.push("Tasks have no status; pass -s.");
 	if (problems.length > 0 || !targetStatus) throw new Error(problems.join("\n"));
 
 	const placedIds = tasks.map((task) => task.id);
@@ -133,12 +139,16 @@ export async function checkPlacement(
 	return { targetStatus, placedIds, orderedTaskIds, unchanged, where: describe(args.placement, anchor?.id) };
 }
 
-/** Places the tasks; `writtenIds` is empty when they were already in place. */
+/**
+ * Places the tasks; `writtenIds` is empty when they were already in place. A `plan` from
+ * checkPlacement is reused only when nothing was written since it was made.
+ */
 export async function placeTasks(
 	core: Core,
 	args: { taskIds: string[]; placement: Placement; status?: string; autoCommit?: boolean },
+	checked?: PlacementPlan & { where: string },
 ): Promise<PlacementResult> {
-	const plan = await checkPlacement(core, args);
+	const plan = checked ?? (await checkPlacement(core, args));
 	const result = { targetStatus: plan.targetStatus, placedIds: plan.placedIds, where: plan.where };
 	if (plan.unchanged) return { ...result, writtenIds: [] };
 	const moved = await core.moveTasksToStatus({
@@ -177,5 +187,17 @@ export function mcpPlacement(args: { position?: unknown; ordinal?: unknown }): P
 		return parsePlacement(String(args.position));
 	} catch (error) {
 		throw new BacklogToolError(error instanceof Error ? error.message : String(error), "VALIDATION_ERROR");
+	}
+}
+
+/** The created task's file exists already, so a failed placement names it rather than invite a duplicate create. */
+export async function placeCreatedMcpTask(core: Core, id: string, placement: Placement, status: string): Promise<void> {
+	try {
+		await placeTasks(core, { taskIds: [id], placement, status });
+	} catch (error) {
+		const reason = error instanceof Error ? error.message : String(error);
+		const position = "at" in placement ? placement.at : placementFlag(placement).slice(2).replace(" ", ":");
+		const hint = `Place it with task_edit { id: "${id}", position: "${position}" }.`;
+		throw new BacklogToolError(`Created task ${id}, but placement failed: ${reason} ${hint}`, "OPERATION_FAILED");
 	}
 }

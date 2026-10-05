@@ -3,7 +3,7 @@ import { DEFAULT_STATUSES } from "../../../constants/index.ts";
 import type { VacatedTaskResult } from "../../../core/backlog.ts";
 import { findLocalDuplicateTaskIds } from "../../../core/duplicate-task-repair.ts";
 import { loadTaskDetail, loadTaskListItems } from "../../../core/task-detail.ts";
-import { checkPlacement, mcpPlacement, placeTasks } from "../../../core/task-position.ts";
+import { checkPlacement, mcpPlacement, placeCreatedMcpTask, placeTasks } from "../../../core/task-position.ts";
 import { isCreateLockError, isTaskLockError } from "../../../file-system/operations.ts";
 import {
 	isLocalEditableTask,
@@ -141,13 +141,13 @@ export class TaskHandlers {
 			const milestone =
 				typeof args.milestone === "string" ? await this.resolveMilestoneInput(args.milestone) : undefined;
 			const placement = mcpPlacement(args);
-			if (placement) await checkPlacement(this.core, { taskIds: [], placement, status: args.status });
+			const plan = placement && (await checkPlacement(this.core, { taskIds: [], placement, status: args.status }));
 
 			const { task: createdTask } = await this.core.createTaskFromInput({
 				title: args.title,
 				description: args.description,
 				dueDate: args.dueDate,
-				status: args.status,
+				status: plan ? plan.targetStatus : args.status,
 				priority: args.priority,
 				type: args.type,
 				project: args.project,
@@ -166,11 +166,12 @@ export class TaskHandlers {
 				definitionOfDoneAdd: args.definitionOfDoneAdd,
 				disableDefinitionOfDoneDefaults: args.disableDefinitionOfDoneDefaults,
 			});
-			if (placement) await placeTasks(this.core, { taskIds: [createdTask.id], placement, status: args.status });
+			if (placement && plan) await placeCreatedMcpTask(this.core, createdTask.id, placement, plan.targetStatus);
 
 			const shown = placement ? await this.loadTaskOrThrow(createdTask.id) : createdTask;
 			return await formatTaskCallResult(await loadTaskDetail(this.core, shown));
 		} catch (error) {
+			if (error instanceof BacklogToolError && error.code === "OPERATION_FAILED") throw error;
 			if (isCreateLockError(error)) {
 				throw new BacklogToolError(error.message, "OPERATION_FAILED");
 			}

@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { appendFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { appendFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { $ } from "bun";
 import { Core } from "../core/backlog.ts";
@@ -198,6 +198,22 @@ describe("task edit placement", () => {
 		expect(await readFile(two.real, "utf8")).toMatch(/ordinal: /);
 	});
 
+	it("names the reason when the listed tasks have no status", async () => {
+		await addTask("D-1", "", 1000);
+		const result = await cli("task", "edit", "D-1", "--top");
+		expect(result.code).toBe(1);
+		expect(result.out).toContain("Tasks have no status; pass -s.");
+	});
+
+	it("prints only the placement and the task view for a single --plain edit", async () => {
+		await addTasks("Backlog", ["D-1", "D-2"]);
+		const result = await cli("task", "edit", "D-2", "--top", "--priority", "high", "--plain");
+		expect(result.code).toBe(0);
+		expect(result.out).not.toContain("Updated task");
+		expect(result.out.indexOf("Placed D-2")).toBeGreaterThanOrEqual(0);
+		expect(result.out.indexOf("Placed D-2")).toBeLessThan(result.out.indexOf("Task D-2 - Task D-2"));
+	});
+
 	it("places a single task with only a placement flag", async () => {
 		await addTasks("Backlog", ["D-1", "D-2"]);
 		const result = await cli("task", "edit", "D-2", "--top");
@@ -216,6 +232,27 @@ describe("task create placement", () => {
 		expect(await column("Backlog")).toEqual(["D-5", "D-1", "D-2"]);
 		expect((await cli("task", "create", "Mid", "-s", "In Progress", "--after", "D-3")).code).toBe(0);
 		expect(await column("In Progress")).toEqual(["D-3", "D-6", "D-4"]);
+	});
+
+	it("creates the task straight in the anchor's status, with no status change", async () => {
+		await appendFile(join(root, "backlog.config.yml"), "on_status_change: 'echo \"$TASK_ID\" >> hook.log'\n");
+		await addTasks("In Progress", ["D-3", "D-4"]);
+		const result = await cli("task", "create", "Mid", "--after", "D-3");
+		expect(result.code).toBe(0);
+		expect(await column("In Progress")).toEqual(["D-3", "D-5", "D-4"]);
+		const hookRan = await stat(join(root, "hook.log")).then(
+			() => true,
+			() => false,
+		);
+		expect(hookRan).toBe(false);
+	});
+
+	it("prints the placement before the --plain task view", async () => {
+		await addTasks("Backlog", ["D-1"]);
+		const result = await cli("task", "create", "Fresh", "--top", "--plain");
+		expect(result.code).toBe(0);
+		expect(result.out.indexOf("Placed D-2")).toBeGreaterThanOrEqual(0);
+		expect(result.out.indexOf("Placed D-2")).toBeLessThan(result.out.indexOf("Task D-2 - Fresh"));
 	});
 
 	it("refuses a bad placement before creating anything", async () => {
@@ -272,6 +309,20 @@ describe("MCP position", () => {
 		expect(await column("Backlog")).toEqual(["D-2", "D-1", "D-3"]);
 		expect((await call("task_create", { title: "Fresh", position: "top" })).isError).not.toBe(true);
 		expect(await column("Backlog")).toEqual(["D-4", "D-2", "D-1", "D-3"]);
+	});
+
+	it("names the created task when the placement fails after task_create wrote it", async () => {
+		await addTasks("Backlog", ["D-1"]);
+		spyOn(server, "moveTasksToStatus").mockResolvedValue({
+			movedTasks: [],
+			changedTasks: [],
+			failures: [{ taskId: "D-2", reason: "Task D-2 not found." }],
+		});
+		const result = await call("task_create", { title: "Racy", position: "top" });
+		expect(result.isError).toBe(true);
+		expect(text(result)).toContain("Created task D-2, but placement failed: Task D-2 not found.");
+		expect(text(result)).toContain('task_edit { id: "D-2", position: "top" }');
+		expect(await new Core(root).filesystem.loadTask("D-2")).not.toBeNull();
 	});
 
 	it("rejects position with ordinal and a bad position", async () => {
