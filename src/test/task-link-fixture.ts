@@ -20,14 +20,17 @@ export const BODY = [
 	"",
 ].join("\n");
 
-export async function writeLinkedProject(root: string, options: { taskHome?: boolean; autoCommit?: boolean } = {}) {
+export async function writeLinkedProject(
+	root: string,
+	options: { taskHome?: boolean; autoCommit?: boolean; statuses?: string[] } = {},
+) {
 	await mkdir(join(root, "tm", "board", "tasks"), { recursive: true });
 	await mkdir(join(root, "tm", "board", "drafts"), { recursive: true });
 	await writeFile(
 		join(root, "backlog.config.yml"),
 		[
 			'project_name: "Links"',
-			'statuses: ["Backlog", "In Progress", "Done"]',
+			`statuses: ${JSON.stringify(options.statuses ?? ["Backlog", "In Progress", "Done"])}`,
 			'task_prefix: "D"',
 			`auto_commit: ${options.autoCommit ?? false}`,
 			"check_active_branches: false",

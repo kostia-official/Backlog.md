@@ -21,6 +21,7 @@ import { applyTaskFilters, createTaskSearchIndex } from "../utils/task-search.ts
 import { compareDoneNewestFirst, compareTaskIds } from "../utils/task-sorting.ts";
 import { getTaskTypeValues, resolveTaskTypeValues } from "../utils/task-type-config.ts";
 import { taskContentSignature } from "../utils/task-watcher.ts";
+import { isDraftWorkflowStatus } from "../utils/terminal-status.ts";
 import { formatUtcDateForDisplay } from "../utils/utc-date-display.ts";
 import { formatAcceptanceCriteriaProgress } from "./acceptance-criteria-progress.ts";
 import { openConfirmPopup } from "./components/confirm-popup.ts";
@@ -256,8 +257,9 @@ function areBoardTaskCollectionsEqual(current: readonly Task[], next: readonly T
 export function getCreatedTaskBoardOutcome(
 	task: Task,
 	visible: boolean,
+	statuses: readonly string[] = [],
 ): { focusTaskId?: string; message: string; tone: "green" | "yellow" } {
-	if (task.status.trim().toLowerCase() === "draft") {
+	if (isDraftWorkflowStatus(task.status, statuses)) {
 		return {
 			message: `Created ${task.id} as a draft. Drafts are not shown on the task board.`,
 			tone: "yellow",
@@ -1275,10 +1277,10 @@ export async function renderBoardTui(
 				return;
 			}
 
-			const draft = task.status.trim().toLowerCase() === "draft";
+			const draft = isDraftWorkflowStatus(task.status, configuredWorkflowStatuses);
 			if (!draft) currentTasks = upsertBoardTask(currentTasks, task);
 			const visible = !draft && getFilteredTasks().some((candidate) => candidate.id === task.id);
-			const outcome = getCreatedTaskBoardOutcome(task, visible);
+			const outcome = getCreatedTaskBoardOutcome(task, visible, configuredWorkflowStatuses);
 			showTransientFooter(` {${outcome.tone}-fg}${outcome.message}{/}`, 6000, false);
 			renderView(outcome.focusTaskId);
 		});

@@ -2176,4 +2176,12 @@ describe("TUI task creation board outcome", () => {
 			tone: "yellow",
 		});
 	});
+
+	it("focuses a created Draft-status task when Draft is a configured column", () => {
+		expect(getCreatedTaskBoardOutcome(task({ status: "Draft" }), true, ["Draft", "Backlog", "Done"])).toEqual({
+			focusTaskId: "TASK-1",
+			message: "Created TASK-1.",
+			tone: "green",
+		});
+	});
 });

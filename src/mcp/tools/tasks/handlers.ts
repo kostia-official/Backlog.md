@@ -23,7 +23,7 @@ import { resolveMilestoneInputForStorage } from "../../../utils/milestone-storag
 import { buildTaskUpdateInput } from "../../../utils/task-edit-builder.ts";
 import { applyTaskFilters, createTaskSearchIndex } from "../../../utils/task-search.ts";
 import { sortByOrdinalAndPriority } from "../../../utils/task-sorting.ts";
-import { getTerminalStatus, isTerminalStatus } from "../../../utils/terminal-status.ts";
+import { getTerminalStatus, isDraftWorkflowStatus, isTerminalStatus } from "../../../utils/terminal-status.ts";
 import { formatUtcDateForDisplay } from "../../../utils/utc-date-display.ts";
 import { BacklogToolError } from "../../errors/mcp-errors.ts";
 import type { McpServer } from "../../server.ts";
@@ -100,10 +100,6 @@ export class TaskHandlers {
 	private async getConfiguredStatuses(): Promise<string[]> {
 		const config = await this.core.filesystem.loadConfig();
 		return config?.statuses ?? [...DEFAULT_STATUSES];
-	}
-
-	private isDraftStatus(status?: string | null): boolean {
-		return (status ?? "").trim().toLowerCase() === "draft";
 	}
 
 	private formatTaskSummaryLine(task: Task, options: { includeStatus?: boolean } = {}): string {
@@ -188,7 +184,7 @@ export class TaskHandlers {
 		}
 		const config = await this.core.filesystem.loadConfig();
 		const priorities = config?.priorities;
-		if (this.isDraftStatus(args.status)) {
+		if (isDraftWorkflowStatus(args.status, config?.statuses)) {
 			let drafts = applyTaskFilters(await this.core.filesystem.listDrafts(), {
 				query: args.search,
 				// Searching drafts has always narrowed to the literal "Draft" status; listing them has not.
@@ -363,7 +359,7 @@ export class TaskHandlers {
 			);
 		}
 
-		if (this.isDraftStatus(args.status)) {
+		if (args.status && isDraftWorkflowStatus(args.status, await this.getConfiguredStatuses())) {
 			const drafts = await this.core.filesystem.listDrafts();
 			const searchIndex = createTaskSearchIndex(drafts);
 			let draftMatches = searchIndex.search({

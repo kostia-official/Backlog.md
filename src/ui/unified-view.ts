@@ -11,6 +11,7 @@ import { collectAvailableLabels } from "../utils/label-filter.ts";
 import { hasAnyPrefix } from "../utils/prefix-config.ts";
 import { applyTaskFilters, createTaskSearchIndex } from "../utils/task-search.ts";
 import { type TaskWatcherCallbacks, watchTasks } from "../utils/task-watcher.ts";
+import { isDraftWorkflowStatus } from "../utils/terminal-status.ts";
 import { renderBoardTui } from "./board.ts";
 import { createLoadingScreen } from "./loading.ts";
 import { buildTaskViewerMilestoneFilterModel, viewTaskEnhanced } from "./task-viewer-with-search.ts";
@@ -284,7 +285,7 @@ export async function createTaskFromBoard(
 ): Promise<Task> {
 	const config = await core.filesystem.loadConfig();
 	const task = (await core.createTaskFromInput(input, config?.autoCommit ?? false)).task;
-	if (task.status.trim().toLowerCase() !== "draft") await onCreated?.(task);
+	if (!isDraftWorkflowStatus(task.status, config?.statuses)) await onCreated?.(task);
 	return task;
 }
 

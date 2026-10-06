@@ -123,7 +123,7 @@ describe("Web drafts list", () => {
 });
 
 describe("Web task popup status field", () => {
-	async function renderModal(task: Task): Promise<HTMLElement> {
+	async function renderModal(task: Task, availableStatuses?: string[]): Promise<HTMLElement> {
 		const container = setupDom();
 		activeRoot = createRoot(container);
 		await act(async () => {
@@ -131,7 +131,12 @@ describe("Web task popup status field", () => {
 				<MemoryRouter initialEntries={["/"]}>
 					<ThemeProvider>
 						<TaskIdIndexProvider tasks={[task]}>
-							<TaskDetailsModal task={task} isOpen={true} onClose={() => {}} />
+							<TaskDetailsModal
+								task={task}
+								isOpen={true}
+								onClose={() => {}}
+								availableStatuses={availableStatuses}
+							/>
 						</TaskIdIndexProvider>
 					</ThemeProvider>
 				</MemoryRouter>,
@@ -160,6 +165,16 @@ describe("Web task popup status field", () => {
 		expect(selected).toBe("Draft");
 		// Promotion stays on the Drafts page action, which is the only place that reports the new ID.
 		expect(disabled).toBe(true);
+	});
+
+	it("lets a task in a configured Draft column change status", async () => {
+		const statuses = ["Draft", "Backlog", "Done"];
+		serveJson(() => statuses);
+		const container = await renderModal({ ...draft("D-1", "Plain task"), status: "Draft" }, statuses);
+
+		const { selected, disabled } = statusField(container);
+		expect(selected).toBe("Draft");
+		expect(disabled).toBe(false);
 	});
 
 	it("offers only the configured statuses for a task", async () => {
