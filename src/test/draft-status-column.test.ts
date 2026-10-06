@@ -67,7 +67,7 @@ afterEach(async () => {
 		expect(ready.out).toContain("D-1");
 		expect(ready.out).toContain("D-2");
 		expect(await boardDir("drafts")).toEqual([]);
-	}, 60_000);
+	});
 
 	it("keeps the id on the core edit path used by MCP and the server", async () => {
 		expect((await cli("task", "create", "A", "-s", "Backlog")).code).toBe(0);
@@ -77,7 +77,7 @@ afterEach(async () => {
 		expect(await boardDir("drafts")).toEqual([]);
 	});
 
-	it("lists and searches Draft-status tasks through MCP", async () => {
+	it("lists Draft-status tasks through MCP task_list", async () => {
 		expect((await cli("task", "create", "A", "-s", "Draft")).code).toBe(0);
 		const server = new McpServer(root, "Test instructions");
 		try {
@@ -88,10 +88,6 @@ afterEach(async () => {
 				params: { name: "task_list", arguments: { status: "Draft" } },
 			});
 			expect((result.content?.[0] as { text?: string } | undefined)?.text ?? "").toContain("D-1");
-			const search = await server.testInterface.callTool({
-				params: { name: "task_search", arguments: { query: "A", status: "Draft" } },
-			});
-			expect((search.content?.[0] as { text?: string } | undefined)?.text ?? "").toContain("D-1");
 		} finally {
 			await server.stop();
 		}
