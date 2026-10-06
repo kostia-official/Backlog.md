@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdir } from "node:fs/promises";
+import { generateKanbanBoardWithMetadata } from "../board.ts";
 import { Core } from "../core/backlog.ts";
 import { parseTask } from "../markdown/parser.ts";
 import { serializeTask } from "../markdown/serializer.ts";
+import type { Task } from "../types/index.ts";
+import { prepareBoardColumns } from "../ui/board.ts";
+import { sortTasksForStatus } from "../web/lib/lanes.ts";
 import { taskFile, writeLinkedProject } from "./task-link-fixture.ts";
 import { createUniqueTestDir, safeCleanup } from "./test-utils.ts";
 
@@ -57,5 +61,42 @@ describe("done_date", () => {
 		const text = serializeTask({ ...parseTask(taskFile("D-1", "One", "Done")), doneDate: "2026-09-30 12:00" });
 		expect(text).toMatch(/updated_date: '2026-09-02 10:00'\ndone_date: '2026-09-30 12:00'\n/);
 		expect(parseTask(text).doneDate).toBe("2026-09-30 12:00");
+	});
+});
+
+describe("Done column order", () => {
+	// D-1 was edited last but finished first; the ordinals would give D-1, D-3, D-2.
+	const task = (id: string, ordinal: number, dates: Partial<Task>): Task => ({
+		id,
+		title: id,
+		status: "Done",
+		assignee: [],
+		labels: [],
+		dependencies: [],
+		createdDate: "2026-09-01 10:00",
+		ordinal,
+		...dates,
+	});
+	const tasks = [
+		task("D-1", 1, { doneDate: "2026-10-01 10:00", updatedDate: "2026-10-05 10:00" }),
+		task("D-2", 3, { doneDate: "2026-10-03 10:00", updatedDate: "2026-10-03 10:00" }),
+		task("D-3", 2, { updatedDate: "2026-10-02 10:00" }),
+	];
+	const expected = ["D-2", "D-3", "D-1"];
+
+	it("is newest done first in the web board", () => {
+		expect(sortTasksForStatus(tasks, "Done").map((t) => t.id)).toEqual(expected);
+	});
+
+	it("is newest done first in the TUI board", () => {
+		const done = prepareBoardColumns(tasks, ["To Do", "Done"]).find((column) => column.status === "Done");
+		expect(done?.tasks.map((t) => t.id)).toEqual(expected);
+	});
+
+	it("is newest done first in the exported board", () => {
+		const lines = generateKanbanBoardWithMetadata(tasks, ["Done"], "P").split("\n");
+		const row = (id: string) => lines.findIndex((line) => line.includes(id));
+		expect(row("D-2")).toBeLessThan(row("D-3"));
+		expect(row("D-3")).toBeLessThan(row("D-1"));
 	});
 });

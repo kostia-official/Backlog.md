@@ -1,4 +1,5 @@
 import type { Milestone, Task } from "../../types";
+import { compareDoneNewestFirst } from "../../utils/task-sorting";
 import { getMilestoneLabel, milestoneKey, normalizeMilestoneName } from "../utils/milestones";
 
 export type LaneMode = "none" | "milestone";
@@ -205,6 +206,8 @@ export function buildLanes(
 export function sortTasksForStatus(tasks: Task[], status: string): Task[] {
 	const isDoneStatus = status.toLowerCase().includes("done") || status.toLowerCase().includes("complete");
 
+	if (isDoneStatus) return tasks.slice().sort(compareDoneNewestFirst);
+
 	return tasks.slice().sort((a, b) => {
 		// Tasks with ordinal come before tasks without
 		if (a.ordinal !== undefined && b.ordinal === undefined) {
@@ -217,12 +220,6 @@ export function sortTasksForStatus(tasks: Task[], status: string): Task[] {
 		// Both have ordinals - sort by ordinal value
 		if (a.ordinal !== undefined && b.ordinal !== undefined && a.ordinal !== b.ordinal) {
 			return a.ordinal - b.ordinal;
-		}
-
-		if (isDoneStatus) {
-			const aDate = a.updatedDate || a.createdDate;
-			const bDate = b.updatedDate || b.createdDate;
-			return bDate.localeCompare(aDate);
 		}
 
 		return a.createdDate.localeCompare(b.createdDate);

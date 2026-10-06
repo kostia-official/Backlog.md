@@ -118,7 +118,7 @@ export async function checkPlacement(
 		}
 		targetStatus = statuses[0];
 	}
-	// Done columns sort by updated date on the board, so an ordinal there would not show.
+	// Done columns sort by done date on the board, so an ordinal there would not show.
 	if (targetStatus && /done|complete/i.test(targetStatus)) {
 		problems.push(`Placement into "${targetStatus}" is not supported; that column sorts by date.`);
 	}

@@ -18,7 +18,7 @@ import {
 import { getPriorityOptions } from "../utils/priority-config.ts";
 import { getProjectValues, resolveProjectValues } from "../utils/project-config.ts";
 import { applyTaskFilters, createTaskSearchIndex } from "../utils/task-search.ts";
-import { compareTaskIds } from "../utils/task-sorting.ts";
+import { compareDoneNewestFirst, compareTaskIds } from "../utils/task-sorting.ts";
 import { getTaskTypeValues, resolveTaskTypeValues } from "../utils/task-type-config.ts";
 import { taskContentSignature } from "../utils/task-watcher.ts";
 import { formatUtcDateForDisplay } from "../utils/utc-date-display.ts";
@@ -98,6 +98,7 @@ function buildColumnTasks(status: string, items: Task[], byId: Map<string, Task>
 	const topLevel: Task[] = [];
 	const childrenByParent = new Map<string, Task[]>();
 	const sorted = items.slice().sort((a, b) => {
+		if (isDoneStatus(status)) return compareDoneNewestFirst(a, b);
 		// Use ordinal for custom sorting if available
 		const aOrd = a.ordinal;
 		const bOrd = b.ordinal;
@@ -111,11 +112,6 @@ function buildColumnTasks(status: string, items: Task[], byId: Map<string, Task>
 		} else if (typeof bOrd === "number") {
 			// Only B has ordinal -> B comes first
 			return 1;
-		}
-
-		const columnIsDone = isDoneStatus(status);
-		if (columnIsDone) {
-			return compareTaskIds(b.id, a.id);
 		}
 
 		return compareTaskIds(a.id, b.id);

@@ -119,6 +119,17 @@ export function sortByPriority<T extends { id: string; priority?: string }>(
 }
 
 /**
+ * Order for a done column: newest first by done date, else updated date, else created date;
+ * ordinals are ignored. Equal dates put the higher ID first.
+ */
+export function compareDoneNewestFirst<
+	T extends { id: string; doneDate?: string; updatedDate?: string; createdDate?: string },
+>(a: T, b: T): number {
+	const dateOf = (task: T) => task.doneDate ?? task.updatedDate ?? task.createdDate ?? "";
+	return dateOf(b).localeCompare(dateOf(a)) || compareTaskIds(b.id, a.id);
+}
+
+/**
  * Sort an array of tasks by their ordinal property, then by task ID.
  * Tasks with ordinal values come before tasks without.
  * Tasks with the same ordinal (or both undefined) are sorted by task ID.

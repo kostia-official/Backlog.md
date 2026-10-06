@@ -167,7 +167,7 @@ describe("groupTasksByLaneAndStatus", () => {
 });
 
 describe("sortTasksForStatus", () => {
-	it("prioritizes ordinal when present and falls back to updatedDate for done statuses", () => {
+	it("sorts a done status by date, newest first, ignoring ordinal", () => {
 		const tasks = [
 			makeTask({ id: "task-1", status: "Done", updatedDate: "2024-01-02", createdDate: "2024-01-01" }),
 			makeTask({ id: "task-2", status: "Done", ordinal: 1, updatedDate: "2024-01-01" }),
@@ -175,6 +175,6 @@ describe("sortTasksForStatus", () => {
 		];
 
 		const sorted = sortTasksForStatus(tasks, "Done").map((t) => t.id);
-		expect(sorted).toEqual(["task-2", "task-3", "task-1"]);
+		expect(sorted).toEqual(["task-3", "task-1", "task-2"]);
 	});
 });

@@ -96,11 +96,10 @@ Project: ${projectName}
 		const top: Task[] = [];
 		const children = new Map<string, Task[]>();
 
-		// Sort items: All columns by updatedDate descending (fallback to createdDate), then by ID as secondary
+		// Sort items: all columns newest first by doneDate, else updatedDate, else createdDate, then by ID
 		const sortedItems = items.sort((a, b) => {
-			// Primary sort: updatedDate (newest first), fallback to createdDate if updatedDate is missing
-			const dateA = a.updatedDate ? new Date(a.updatedDate).getTime() : new Date(a.createdDate).getTime();
-			const dateB = b.updatedDate ? new Date(b.updatedDate).getTime() : new Date(b.createdDate).getTime();
+			const dateA = new Date(a.doneDate ?? a.updatedDate ?? a.createdDate).getTime();
+			const dateB = new Date(b.doneDate ?? b.updatedDate ?? b.createdDate).getTime();
 			if (dateB !== dateA) {
 				return dateB - dateA; // Newest first
 			}
