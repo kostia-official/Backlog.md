@@ -43,6 +43,16 @@ describe("done_date", () => {
 		expect(task.doneDate).toBe("2026-01-02 03:04");
 	});
 
+	it("is set on create in the last status, and only there", async () => {
+		const { task: done } = await core.createTaskFromInput({ title: "Born done", status: "Done" }, false);
+		expect(done.doneDate).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+		expect(done.doneDate).toBe(done.createdDate);
+		expect((await core.filesystem.loadTask(done.id))?.doneDate).toBe(done.doneDate);
+
+		const { task: todo } = await core.createTaskFromInput({ title: "Born in backlog", status: "Backlog" }, false);
+		expect(todo.doneDate).toBeUndefined();
+	});
+
 	it("round-trips through serializeTask and parseTask, right after updated_date", () => {
 		const text = serializeTask({ ...parseTask(taskFile("D-1", "One", "Done")), doneDate: "2026-09-30 12:00" });
 		expect(text).toMatch(/updated_date: '2026-09-02 10:00'\ndone_date: '2026-09-30 12:00'\n/);

@@ -140,25 +140,26 @@ export async function checkPlacement(
 }
 
 /**
- * Places the tasks; `writtenIds` is empty when they were already in place. A `plan` from
- * checkPlacement is reused only when nothing was written since it was made.
+ * Places the tasks; `writtenIds` is empty when they were already in place. The column is read,
+ * planned and written under the board's placement lock, so a concurrent placement sees this write.
  */
 export async function placeTasks(
 	core: Core,
 	args: { taskIds: string[]; placement: Placement; status?: string; autoCommit?: boolean },
-	checked?: PlacementPlan & { where: string },
 ): Promise<PlacementResult> {
-	const plan = checked ?? (await checkPlacement(core, args));
-	const result = { targetStatus: plan.targetStatus, placedIds: plan.placedIds, where: plan.where };
-	if (plan.unchanged) return { ...result, writtenIds: [] };
-	const moved = await core.moveTasksToStatus({
-		taskIds: plan.placedIds,
-		targetStatus: plan.targetStatus,
-		orderedTaskIds: plan.orderedTaskIds,
-		autoCommit: args.autoCommit,
+	return await core.filesystem.withPlacementLock(async () => {
+		const plan = await checkPlacement(core, args);
+		const result = { targetStatus: plan.targetStatus, placedIds: plan.placedIds, where: plan.where };
+		if (plan.unchanged) return { ...result, writtenIds: [] };
+		const moved = await core.moveTasksToStatus({
+			taskIds: plan.placedIds,
+			targetStatus: plan.targetStatus,
+			orderedTaskIds: plan.orderedTaskIds,
+			autoCommit: args.autoCommit,
+		});
+		if (moved.failures.length > 0) throw new Error(moved.failures.map((failure) => failure.reason).join("\n"));
+		return { ...result, writtenIds: moved.changedTasks.map((task) => task.id) };
 	});
-	if (moved.failures.length > 0) throw new Error(moved.failures.map((failure) => failure.reason).join("\n"));
-	return { ...result, writtenIds: moved.changedTasks.map((task) => task.id) };
 }
 
 export function printPlacement(result: PlacementResult): void {

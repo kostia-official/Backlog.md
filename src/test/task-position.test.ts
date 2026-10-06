@@ -3,6 +3,7 @@ import { appendFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/p
 import { join, relative } from "node:path";
 import { $ } from "bun";
 import { Core } from "../core/backlog.ts";
+import { placeTasks } from "../core/task-position.ts";
 import { McpServer } from "../mcp/server.ts";
 import { registerTaskTools } from "../mcp/tools/tasks/index.ts";
 import { sortByOrdinal } from "../utils/task-sorting.ts";
@@ -219,6 +220,19 @@ describe("task edit placement", () => {
 		const result = await cli("task", "edit", "D-2", "--top");
 		expect(result.code).toBe(0);
 		expect(await column("Backlog")).toEqual(["D-2", "D-1"]);
+	});
+});
+
+describe("concurrent placement", () => {
+	it("serializes two placements into one column, so each sees the other's write", async () => {
+		await addTasks("Backlog", ["D-1", "D-2", "D-3", "D-4"]);
+		await Promise.all(
+			["D-3", "D-4"].map((id) => placeTasks(new Core(root), { taskIds: [id], placement: { at: "top" } })),
+		);
+		const tasks = await new Core(root).filesystem.listTasks();
+		const ordinals = tasks.map((task) => task.ordinal);
+		expect(new Set(ordinals).size).toBe(ordinals.length);
+		expect((await column("Backlog")).slice(2)).toEqual(["D-1", "D-2"]);
 	});
 });
 

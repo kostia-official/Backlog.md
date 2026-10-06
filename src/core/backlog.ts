@@ -1865,6 +1865,8 @@ export class Core {
 				modifiedFiles: normalizedModifiedFiles,
 				rawContent: input.rawContent ?? "",
 				createdDate,
+				// Created in the last configured status counts as entering it.
+				...(resolvedStatus === (config?.statuses ?? DEFAULT_STATUSES).at(-1) && { doneDate: createdDate }),
 				...(dueDate && { dueDate }),
 				...(parentTaskId && { parentTaskId }),
 				...(priority && { priority }),

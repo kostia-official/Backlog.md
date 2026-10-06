@@ -643,6 +643,36 @@ export class FileSystem {
 	}
 
 	/**
+	 * Board-wide lock around a placement's read-plan-write, so two placements never compute
+	 * ordinals from one snapshot. It waits like the create lock, under its own lock target,
+	 * because proper-lockfile keys its in-process registry by target path.
+	 */
+	async withPlacementLock<T>(fn: () => Promise<T>): Promise<T> {
+		if (process.env.USE_GLOBAL_TASK_ID_LOCK?.toLowerCase() === "false") {
+			return await fn();
+		}
+		const { locksDir } = await this.getCreateLockTarget(await this.getBacklogDir());
+		await mkdir(locksDir, { recursive: true });
+		const retryDelayMs = DEFAULT_CREATE_LOCK_RETRY_DELAY_MS;
+		return await this.withLockTarget(
+			locksDir,
+			join(locksDir, "place"),
+			{
+				staleMs: DEFAULT_CREATE_LOCK_STALE_MS,
+				retryDelayMs,
+				retries: Math.ceil(DEFAULT_CREATE_LOCK_TIMEOUT_MS / retryDelayMs) - 1,
+			},
+			(error) =>
+				(error as NodeJS.ErrnoException | undefined)?.code === "ELOCKED"
+					? new Error("Another placement is still running on this board. Try again.")
+					: error instanceof Error
+						? error
+						: new Error(String(error)),
+			fn,
+		);
+	}
+
+	/**
 	 * Per-task counterpart of the create lock, used to serialize a task's read-modify-write.
 	 * It fails fast instead of waiting: on contention the caller (human or agent) decides
 	 * whether to retry, and nothing is merged or overwritten behind their back.

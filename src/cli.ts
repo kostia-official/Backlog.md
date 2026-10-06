@@ -3201,11 +3201,10 @@ async function runEditCommand(target: EditCommandTarget, requestedIds: string[] 
 	const core = new Core(cwd);
 
 	// Placement checks see the IDs as typed, so a repeated ID is an error rather than deduplicated.
-	let placementPlan: Awaited<ReturnType<typeof checkPlacement>> | undefined;
 	if (placement) {
 		const placementIds = (requestedIds ?? []).map(String).filter((id) => id.trim());
 		try {
-			placementPlan = await checkPlacement(core, { taskIds: placementIds, placement, status: options.status });
+			await checkPlacement(core, { taskIds: placementIds, placement, status: options.status });
 		} catch (error) {
 			console.error(error instanceof Error ? error.message : String(error));
 			process.exitCode = 1;
@@ -3637,7 +3636,7 @@ async function runEditCommand(target: EditCommandTarget, requestedIds: string[] 
 	if (placement && placedIds.length > 0) {
 		try {
 			const args = { taskIds: placedIds, placement, status: canonicalStatus };
-			printPlacement(await placeTasks(core, args, hasFieldEdit ? undefined : placementPlan));
+			printPlacement(await placeTasks(core, args));
 		} catch (error) {
 			console.error(error instanceof Error ? error.message : String(error));
 			process.exitCode = 1;
