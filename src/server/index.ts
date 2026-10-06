@@ -1202,8 +1202,8 @@ export class BacklogServer {
 			return Response.json(updatedTask);
 		} catch (error) {
 			const message = formatErrorForWeb(error instanceof Error ? error.message : "Failed to update task");
-			// Editing a task into the Draft status demotes it, so the same "already moved" report the
-			// demote endpoint makes applies here: refresh, and do not invite a retry.
+			// Editing a task into the Draft status demotes it unless Draft is a configured column, so the
+			// same "already moved" report the demote endpoint makes applies here: refresh, no retry.
 			const demotionState = readMovedState(error, "demotionState");
 			if (demotionState) {
 				this.broadcastDataUpdated();
