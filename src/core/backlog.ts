@@ -105,7 +105,7 @@ import { sortByOrdinal } from "../utils/task-sorting.ts";
 import { attachSubtaskSummaries } from "../utils/task-subtasks.ts";
 import { formatValidTaskTypeValues, resolveTaskTypeValue } from "../utils/task-type-config.ts";
 import { upsertTaskUpdatedDate } from "../utils/task-updated-date.ts";
-import { isDraftWorkflowStatus, isTerminalStatus } from "../utils/terminal-status.ts";
+import { isTerminalStatus } from "../utils/terminal-status.ts";
 import { migrateConfig, needsMigration } from "./config-migration.ts";
 import { ContentStore, type TaskCorpusSnapshot } from "./content-store.ts";
 import {
@@ -826,10 +826,6 @@ export class Core {
 
 	private filterLocalEditableTasks(tasks: Task[]): Task[] {
 		return tasks.filter(isLocalEditableTask);
-	}
-
-	private async isDraftWorkflow(status?: string): Promise<boolean> {
-		return isDraftWorkflowStatus(status, (await this.fs.loadConfig())?.statuses);
 	}
 
 	private async requireCanonicalStatus(status: string): Promise<string> {
@@ -1776,7 +1772,7 @@ export class Core {
 
 		// Determine if this is a draft BEFORE generating the ID
 		const requestedStatus = input.status?.trim();
-		const isDraft = await this.isDraftWorkflow(requestedStatus);
+		const isDraft = requestedStatus?.toLowerCase() === "draft";
 		const requestedParentTaskId = input.parentTaskId?.trim();
 
 		// Generate ID with appropriate entity type - drafts get DRAFT-X, tasks get TASK-X
@@ -2619,7 +2615,8 @@ export class Core {
 			throw new Error(`Task not found: ${taskId}`);
 		}
 
-		if (await this.isDraftWorkflow(input.status)) {
+		const requestedStatus = input.status?.trim().toLowerCase();
+		if (requestedStatus === "draft") {
 			// demoteTaskWithUpdates takes the task lock itself, so it must not be nested here.
 			return (await this.demoteTaskWithUpdates(task, input, autoCommit, options)).task;
 		}
@@ -2723,7 +2720,7 @@ export class Core {
 			return { task: await this.updateDraftFromInput(resolvedDraft, input, autoCommit), cleanedTaskIds: [] };
 		}
 
-		if (await this.isDraftWorkflow(input.status)) {
+		if (input.status?.trim().toLowerCase() === "draft") {
 			const task = await this.loadTaskForMutation(taskId, options);
 			if (!task) throw new Error(`Task not found: ${taskId}`);
 			return await this.demoteTaskWithUpdates(task, input, autoCommit, options);

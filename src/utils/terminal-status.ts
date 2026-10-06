@@ -14,12 +14,3 @@ export function isTerminalStatus(status: string | null | undefined, statuses: re
 		terminalStatus !== null && normalizeStatusForComparison(status) === normalizeStatusForComparison(terminalStatus)
 	);
 }
-
-/** Status "Draft" means the drafts workflow unless the project configures a Draft status column. */
-export function isDraftWorkflowStatus(
-	status: string | null | undefined,
-	statuses: readonly string[] | undefined,
-): boolean {
-	const key = normalizeStatusForComparison(status);
-	return key === "draft" && !(statuses ?? []).some((configured) => normalizeStatusForComparison(configured) === key);
-}

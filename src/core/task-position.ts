@@ -5,7 +5,6 @@ import type { Task } from "../types/index.ts";
 import { getCanonicalStatus } from "../utils/status.ts";
 import { AmbiguousTaskIdError } from "../utils/task-path.ts";
 import { sortByOrdinal } from "../utils/task-sorting.ts";
-import { isDraftWorkflowStatus } from "../utils/terminal-status.ts";
 import type { Core } from "./backlog.ts";
 
 /* Places a block of tasks in a board column, in the order given; the ordinals come from moveTasksToStatus. */
@@ -98,11 +97,10 @@ export async function checkPlacement(
 	}
 
 	// A task about to be created goes to the default status unless an anchor names the column.
-	const config = await core.filesystem.loadConfig();
-	const defaultStatus = config?.defaultStatus || FALLBACK_STATUS;
+	const defaultStatus = (await core.filesystem.loadConfig())?.defaultStatus || FALLBACK_STATUS;
 	const status = args.status ?? (args.taskIds.length === 0 && !anchorId ? defaultStatus : undefined);
 	let targetStatus: string | undefined;
-	if (isDraftWorkflowStatus(status, config?.statuses)) {
+	if (status?.trim().toLowerCase() === "draft") {
 		problems.push("Drafts have no board column; drop the placement flag.");
 	} else if (status) {
 		targetStatus = (await getCanonicalStatus(status, core)) ?? undefined;

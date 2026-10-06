@@ -18,7 +18,7 @@ import { getTaskTypeValues, resolveTaskTypeValue } from "../../utils/task-type-c
 import { formatReadinessBlockers } from "../../utils/readiness";
 import { buildTaskIdIndex, resolveTaskReference } from "../utils/task-id-links";
 import { findDirectSubtasks, findParentTask, summarizeSubtaskProgress } from "../../utils/task-subtasks.ts";
-import { isDraftWorkflowStatus, isTerminalStatus } from "../../utils/terminal-status.ts";
+import { isTerminalStatus } from "../../utils/terminal-status.ts";
 import { createUrlPath } from "../utils/urlHelpers";
 
 interface Props {
@@ -205,8 +205,7 @@ export const TaskDetailsModal: React.FC<Props> = ({
   const isFromOtherBranch = Boolean(task?.branch);
   // Promoting a draft replaces it with a new task ID, which the Drafts page does through its own
   // Promote action, so the popup shows the draft status without turning the field into a second one.
-  // A task in a configured Draft column is a plain task; isDraftMode still locks real drafts.
-  const isOpenDraft = Boolean(task) && (Boolean(isDraftMode) || isDraftWorkflowStatus(task?.status, availableStatuses));
+  const isOpenDraft = (task?.status ?? "").trim().toLowerCase() === "draft";
   const demotionIdentity = [isOpen ? "open" : "closed", task?.id, task?.source, task?.branch, isOpenDraft ? "draft" : "task"].join("\0");
   const demotionIdentityRef = useRef(demotionIdentity);
   demotionIdentityRef.current = demotionIdentity;
