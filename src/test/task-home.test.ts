@@ -146,4 +146,26 @@ describeIfSymlinks("task_home", () => {
 		expect(cli.stdout.toString()).toContain("tm/D-3-lonely/task.md");
 		expect(cli.stdout.toString()).toContain("tm/D-4-drifted/task.md (id: D-5)");
 	});
+
+	it("names the home file after the slug when task_home uses {slug} in the file name", async () => {
+		const configPath = join(root, "backlog.config.yml");
+		const config = await read(configPath);
+		await writeFile(configPath, config.replace("tm/{ID}-{slug}/task.md", "tm/{ID}-{slug}/{slug}.description.md"));
+		core = new Core(root);
+
+		const { filePath } = await core.createTaskFromInput(
+			{ title: "Create forward handle", slug: "forward-handle" },
+			false,
+		);
+		expect(await linkText(filePath as string)).toBe("../../D-1-forward-handle/forward-handle.description.md");
+		expect(await read(filePath as string)).toContain("id: D-1");
+		await core.createTaskFromInput({ title: "Reaction window" }, false);
+		expect(await exists(join(root, "tm", "D-2-reaction-window", "reaction-window.description.md"))).toBe(true);
+
+		await mkdir(join(root, "tm", "D-7-orphan"), { recursive: true });
+		await writeFile(join(root, "tm", "D-7-orphan", "orphan.description.md"), taskFile("D-7", "Orphan"));
+		expect((await core.createTaskFromInput({ title: "Next" }, false)).task.id).toBe("D-8");
+		const findings = await diagnoseTaskLinks(root, core.filesystem.backlogDir, "tm/{ID}-{slug}/{slug}.description.md");
+		expect(findings.unlinkedHomes).toEqual(["tm/D-7-orphan/orphan.description.md"]);
+	});
 });
